@@ -1871,8 +1871,9 @@ with tab1:
             lead_type_series = df['Lead Type'].astype(str).str.strip()
             lead_types = sorted(
                 [
-                    x for x in lead_type_series.unique()
-                    if x and x.upper() != 'NAN'
+                    str(x).strip()
+                    for x in lead_type_series.unique()
+                    if pd.notna(x) and str(x).strip() != "" and str(x).strip().upper() != "NAN"
                 ]
             )
         else:
