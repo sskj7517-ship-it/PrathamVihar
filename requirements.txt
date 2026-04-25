@@ -1,0 +1,15 @@
+streamlit
+supabase
+pandas
+numpy
+fpdf
+reportlab
+altair
+kaleido
+xlsxwriter>=3.1.9
+docxtpl
+python-docx
+jinja2
+google-genai>=0.5.0
+vl-converter-python
+python-dotenv
