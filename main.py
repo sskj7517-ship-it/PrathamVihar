@@ -9044,7 +9044,21 @@ with tab1:
         # Local safe helpers
         # ------------------------------------------------------------
         def _safe_str_series(series):
-            return series.fillna("").apply(lambda x: str(x).strip())
+            """
+            Safe string conversion for normal, numeric, datetime, and categorical columns.
+            Fixes: TypeError when fillna("") is used on pandas Categorical columns.
+            """
+            if series is None:
+                return pd.Series(dtype="object")
+        
+            # If duplicate column names return a DataFrame, take the first column safely
+            if isinstance(series, pd.DataFrame):
+                series = series.iloc[:, 0]
+        
+            s = pd.Series(series).astype("object")
+            s = s.where(pd.notna(s), "")
+        
+            return s.apply(lambda x: str(x).strip())
     
         def _norm_status(v):
             return str(v or "").strip().lower()
