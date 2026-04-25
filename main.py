@@ -9516,19 +9516,25 @@ with tab2:
         st.markdown("**Overall Total Paid to Date (Agreement basis)**")
         st.dataframe(df_paid, use_container_width=True)
 with tab3:
-    # --- BOOKING PUNCH ---
     st.header("📝 Booking Punch")
 
     if not sheets_connected:
         st.warning("📋 Please connect to Supabase to submit bookings.")
         st.stop()
 
-    # ---- session defaults ----
+    def clean_text(v):
+        v = "" if v is None else str(v).strip()
+        return None if v == "" else v
+
+    def clean_num(v):
+        if v is None or v == "":
+            return None
+        return v
+
     st.session_state.setdefault("inputs_locked", False)
     st.session_state.setdefault("calculated", False)
     st.session_state.setdefault("booking_selected_rate", None)
     st.session_state.setdefault("agreement_cost", None)
-    st.session_state.setdefault("first_visit_date", None)
     st.session_state.setdefault("stamp_duty_percent", 7)
     st.session_state.setdefault("parkings", [{"type": "Stilt", "number": ""}])
     st.session_state.setdefault("offer_1", "")
@@ -9541,8 +9547,7 @@ with tab3:
     st.session_state.setdefault("visit_count", "")
 
     location_options = [
-        "",
-        "Dhayari", "Dhayari Gaon", "Dhayari Phata", "Chavan Baug", "Benkar Nagar",
+        "", "Dhayari", "Dhayari Gaon", "Dhayari Phata", "Chavan Baug", "Benkar Nagar",
         "Ganesh Nagar (Dhayari)", "Shree Nagar (Dhayari)", "Raykar Mala", "Garmal",
         "Morya Nagar (Dhayari)", "Saikrupa Nagar", "Siddharth Nagar (Dhayari side)",
         "Laxmi Nagar (Dhayari)", "Nanded", "Nanded Gaon", "Nanded Fata", "Nanded City",
@@ -9590,7 +9595,7 @@ with tab3:
         "25000 Electronic Voucher"
     ]
 
-    def offer_label(opt: str) -> str:
+    def offer_label(opt):
         return "— No Offer —" if opt == "" else opt
 
     visit_count_options = [""] + list(range(1, 11))
@@ -9789,62 +9794,82 @@ with tab3:
                 if p_type and p_num:
                     parking_parts.append(f"{p_type}-{p_num}")
 
+            parking_string = " , ".join(parking_parts)
             month_label = st.session_state.booking_date.strftime("%B %y").upper()
-
             agreement_cost = st.session_state.agreement_cost
 
-            slabs = {
-                "booking_amount": round(agreement_cost * 0.05),
-                "agreement": round(agreement_cost * 0.10),
-                "plinth": round(agreement_cost * 0.15),
-                "third_floor": round(agreement_cost * 0.075),
-                "seventh_floor": round(agreement_cost * 0.075),
-                "tenth_floor": round(agreement_cost * 0.075),
-                "thirteenth_floor": round(agreement_cost * 0.075),
-                "flooring": round(agreement_cost * 0.075),
-                "plastering": round(agreement_cost * 0.075),
-                "plumbing": round(agreement_cost * 0.075),
-                "electrical": round(agreement_cost * 0.075),
-                "sanitary_lift": round(agreement_cost * 0.05),
-                "possession": round(agreement_cost * 0.05),
-            }
+            booking_amount = round(agreement_cost * 0.05)
+            agreement = round(agreement_cost * 0.10)
+            plinth = round(agreement_cost * 0.15)
+            third_floor = round(agreement_cost * 0.075)
+            seventh_floor = round(agreement_cost * 0.075)
+            tenth_floor = round(agreement_cost * 0.075)
+            thirteenth_floor = round(agreement_cost * 0.075)
+            flooring = round(agreement_cost * 0.075)
+            plastering = round(agreement_cost * 0.075)
+            plumbing = round(agreement_cost * 0.075)
+            electrical = round(agreement_cost * 0.075)
+            sanitary_lift = round(agreement_cost * 0.05)
+            possession = round(agreement_cost * 0.05)
 
             booking_row = {
                 "booking_date": st.session_state.booking_date.isoformat(),
-                "customer_name": st.session_state.cust_name.strip(),
-                "wing": st.session_state.wing,
+                "customer_name": clean_text(st.session_state.cust_name),
+                "wing": clean_text(st.session_state.wing),
                 "floor": int(st.session_state.floor),
-                "flat_number": st.session_state.flat_number.strip(),
-                "unit_type": st.session_state.unit_type,
+                "flat_number": clean_text(st.session_state.flat_number),
+                "type": clean_text(st.session_state.unit_type),
+
                 "final_price": float(st.session_state.final_price_lakhs),
                 "rate": int(st.session_state.booking_selected_rate),
                 "agreement_cost": int(st.session_state.agreement_cost),
-                "lead_type": st.session_state.lead_type,
-                "sales_executive": st.session_state.sales_exec,
-                "month": month_label,
-                "civil_changes": st.session_state.get("civil_changes", ""),
-                "offer_1": st.session_state.get("offer_1", ""),
-                "offer_2": st.session_state.get("offer_2", ""),
+
+                "lead_type": clean_text(st.session_state.lead_type),
+                "sales_executive": clean_text(st.session_state.sales_exec),
+                "month": clean_text(month_label),
+
+                "civil_changes": clean_text(st.session_state.get("civil_changes")),
+                "offer_1": clean_text(st.session_state.get("offer_1")),
+                "offer_2": clean_text(st.session_state.get("offer_2")),
+
                 "offer_1_rewarded": False,
                 "offer_2_rewarded": False,
                 "referral_given": False,
-                "stamp_duty": "",
+
+                "stamp_duty": None,
                 "agreement_done": False,
-                "incentive": "",
-                "rcc": "",
+                "incentive": None,
+                "rcc": None,
                 "possession_handover": False,
-                "insider_banker": "",
-                "outsider_banker": "",
+                "insider_banker": None,
+                "outsider_banker": None,
+
                 "carpet_area": float(st.session_state.booking_carpet_area_main),
+
+                "booking_amount": booking_amount,
+                "agreement": agreement,
+                "plinth": plinth,
+                "third_floor": third_floor,
+                "seventh_floor": seventh_floor,
+                "tenth_floor": tenth_floor,
+                "thirteenth_floor": thirteenth_floor,
+                "flooring": flooring,
+                "plastering": plastering,
+                "plumbing": plumbing,
+                "electrical": electrical,
+                "sanitary_lift": sanitary_lift,
+                "possession": possession,
+
                 "first_visit_date": st.session_state.first_visit_date.isoformat(),
                 "conversion_period_days": int(_days_gap),
-                "parking_number": " , ".join(parking_parts),
-                "merged_units": st.session_state.get("merged_units", ""),
-                "location": st.session_state.get("location", "").strip(),
+
+                "parking_number": clean_text(parking_string),
+                "merged_units": clean_text(st.session_state.get("merged_units")),
+                "location": clean_text(st.session_state.get("location")),
                 "visit_count": int(st.session_state.get("visit_count")),
-                "received_amount": 0,
+
+                "received_amount": None,
                 "stamp_duty_percent": int(st.session_state.stamp_duty_percent),
-                **slabs
             }
 
             supabase.table("bookings").insert(booking_row).execute()
