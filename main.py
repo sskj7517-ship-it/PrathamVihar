@@ -934,6 +934,7 @@ with tab5:
                     "Exactly one additional filter is applied at a time. "
                     "Checkboxes update Supabase immediately."
                 )
+with tab1:
     import math, datetime, re
     import pandas as pd
     import altair as alt
