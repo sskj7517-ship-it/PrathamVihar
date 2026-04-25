@@ -20331,3 +20331,461 @@ with tab13:
                 st.markdown("---")
 
     st.info(PV_SHEET_RULES)
+
+# =========================
+# TAB 14 — Daily Visits
+# Supabase table: public.daily_visits
+# =========================
+with tab14:
+    import datetime
+    import pandas as pd
+    import streamlit as st
+
+    st.title("📆 Daily Visits")
+
+    # ============================================================
+    # Supabase guard
+    # ============================================================
+    if "supabase" not in globals() or supabase is None:
+        st.warning("📋 Supabase client is not initialized. Please check your Supabase connection block.")
+        st.stop()
+
+    DAILY_VISITS_TABLE = "daily_visits"
+
+    # ============================================================
+    # UI polish
+    # ============================================================
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stForm"]{
+            border: 1px solid rgba(49,51,63,0.10);
+            border-radius: 20px;
+            padding: 20px 20px 10px 20px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.98));
+            box-shadow: 0 10px 28px rgba(0,0,0,0.06);
+        }
+        .stNumberInput input, .stTextInput input, .stDateInput input,
+        .stSelectbox div[data-baseweb="select"]{
+            border-radius: 12px !important;
+        }
+        div[data-testid="stForm"] button[kind="primary"]{
+            border-radius: 14px !important;
+            height: 2.9rem !important;
+            font-weight: 700 !important;
+            width: 100%;
+        }
+        div[data-testid="stMetric"]{
+            background: rgba(255,255,255,0.85);
+            border: 1px solid rgba(49,51,63,0.08);
+            border-radius: 16px;
+            padding: 10px 14px;
+        }
+        .section-title{
+            font-size: 1.02rem;
+            font-weight: 700;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+        .dv-chip-wrap{
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+            margin:8px 0 14px 0;
+        }
+        .dv-chip{
+            display:inline-flex;
+            align-items:center;
+            gap:7px;
+            border-radius:999px;
+            padding:6px 10px;
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            font-size:12.5px;
+            font-weight:800;
+            color:#0f172a;
+        }
+        .dv-chip.ok{
+            background:#ecfdf5;
+            border-color:#bbf7d0;
+            color:#166534;
+        }
+        .dv-dot{
+            width:8px;
+            height:8px;
+            border-radius:999px;
+            background:#2563eb;
+            display:inline-block;
+        }
+        .dv-chip.ok .dv-dot{
+            background:#10b981;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # ============================================================
+    # Helpers
+    # ============================================================
+    def _to_int(x):
+        try:
+            return int(float(str(x).strip() or 0))
+        except Exception:
+            return 0
+
+    def _date_to_iso(d: datetime.date) -> str:
+        return d.strftime("%Y-%m-%d")
+
+    def _month_label(d: datetime.date) -> str:
+        return d.strftime("%B %y").upper()
+
+    def _fetch_existing_daily_visit(target_date: datetime.date):
+        """
+        Finds existing row(s) for the selected visit_date.
+        Since the table currently has no UNIQUE constraint on visit_date,
+        this selects all matches and updates the latest id if duplicates exist.
+        """
+        try:
+            res = (
+                supabase
+                .table(DAILY_VISITS_TABLE)
+                .select("*")
+                .eq("visit_date", _date_to_iso(target_date))
+                .order("id", desc=True)
+                .execute()
+            )
+            return getattr(res, "data", []) or []
+        except Exception as e:
+            st.error(f"❌ Error checking existing Daily Visits row: {e}")
+            return []
+
+    def _insert_daily_visit(payload: dict):
+        return supabase.table(DAILY_VISITS_TABLE).insert(payload).execute()
+
+    def _update_daily_visit(row_id: int, payload: dict):
+        return supabase.table(DAILY_VISITS_TABLE).update(payload).eq("id", row_id).execute()
+
+    def _load_recent_daily_visits(limit: int = 10) -> pd.DataFrame:
+        try:
+            res = (
+                supabase
+                .table(DAILY_VISITS_TABLE)
+                .select("*")
+                .order("visit_date", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            data = getattr(res, "data", []) or []
+            return pd.DataFrame(data)
+        except Exception:
+            return pd.DataFrame()
+
+    # ============================================================
+    # Festival dropdown options
+    # ============================================================
+    FESTIVALS = [
+        "New Year",
+        "Makar Sankranti",
+        "Pongal",
+        "Republic Day",
+        "Vasant Panchami",
+        "Maha Shivratri",
+        "Holi",
+        "Ram Navami",
+        "Mahavir Jayanti",
+        "Good Friday",
+        "Eid al-Fitr",
+        "Buddha Purnima",
+        "Eid al-Adha",
+        "Raksha Bandhan",
+        "Independence Day",
+        "Janmashtami",
+        "Ganesh Chaturthi",
+        "Onam",
+        "Navratri",
+        "Dussehra / Vijayadashami",
+        "Gandhi Jayanti",
+        "Karwa Chauth",
+        "Diwali",
+        "Bhai Dooj",
+        "Chhath Puja",
+        "Guru Nanak Jayanti",
+        "Christmas",
+    ]
+
+    FESTIVAL_OPTIONS = ["None"] + FESTIVALS + ["Other (type)"]
+
+    def festival_input_block(label: str, key_prefix: str) -> str:
+        choice = st.selectbox(label, FESTIVAL_OPTIONS, index=0, key=f"{key_prefix}_choice")
+        other = ""
+
+        if choice == "Other (type)":
+            other = st.text_input(
+                f"Type {label} name",
+                value="",
+                placeholder="e.g., Lohri / Akshaya Tritiya / etc.",
+                key=f"{key_prefix}_other",
+            )
+
+        if choice == "None":
+            return ""
+
+        if choice == "Other (type)":
+            return str(other or "").strip()
+
+        return str(choice).strip()
+
+    SALES_EXECUTIVES = [
+        ("Tejas P", "tejas_p"),
+        ("Komal K", "komal_k"),
+        ("Ashutosh S", "ashutosh_s"),
+        ("Sailee D", "sailee_d"),
+    ]
+
+    st.caption(
+        "Enter source-wise visits and executive-wise performance. Month, day, totals, and updates are handled automatically."
+    )
+
+    # ============================================================
+    # Single Form
+    # ============================================================
+    with st.form("daily_visits_form_supabase", clear_on_submit=True):
+        st.markdown("#### 🧾 Daily Visit Entry")
+
+        top1, top2 = st.columns([1, 1])
+        d = top1.date_input("Date", value=datetime.date.today(), format="DD/MM/YYYY")
+
+        top2.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
+        top2.info("💡 Entry for the selected day will update if already present.")
+
+        st.markdown("<div class='section-title'>📍 Lead Sources</div>", unsafe_allow_html=True)
+
+        s1, s2, s3 = st.columns(3)
+        cp_visits = s1.number_input("CP Visits", min_value=0, step=1, value=0)
+        walkin = s2.number_input("Direct Walk-in", min_value=0, step=1, value=0)
+        refs = s3.number_input("References", min_value=0, step=1, value=0)
+
+        s4, s5 = st.columns(2)
+        digital = s4.number_input("Digital", min_value=0, step=1, value=0)
+        newspaper = s5.number_input("Newspaper", min_value=0, step=1, value=0)
+
+        st.markdown("<div class='section-title'>👥 Sales Executive Wise</div>", unsafe_allow_html=True)
+
+        revisits = {}
+        attended = {}
+        calls_answered = {}
+        calls_unanswered = {}
+
+        exec_cols = st.columns(4)
+
+        for i, (exec_name, exec_key) in enumerate(SALES_EXECUTIVES):
+            with exec_cols[i]:
+                with st.container(border=True):
+                    st.markdown(f"**{exec_name}**")
+
+                    revisits[exec_key] = st.number_input(
+                        f"{exec_name} Revisits",
+                        min_value=0,
+                        step=1,
+                        value=0,
+                        key=f"{exec_key}_revisits"
+                    )
+
+                    attended[exec_key] = st.number_input(
+                        f"{exec_name} Attended",
+                        min_value=0,
+                        step=1,
+                        value=0,
+                        key=f"{exec_key}_attended"
+                    )
+
+                    calls_answered[exec_key] = st.number_input(
+                        f"{exec_name} Calls Answered",
+                        min_value=0,
+                        step=1,
+                        value=0,
+                        key=f"{exec_key}_calls_answered"
+                    )
+
+                    calls_unanswered[exec_key] = st.number_input(
+                        f"{exec_name} Calls Unanswered",
+                        min_value=0,
+                        step=1,
+                        value=0,
+                        key=f"{exec_key}_calls_unanswered"
+                    )
+
+        revisit_total = int(sum(revisits.values()))
+        attended_total = int(sum(attended.values()))
+        calls_answered_total = int(sum(calls_answered.values()))
+        calls_unanswered_total = int(sum(calls_unanswered.values()))
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Revisits", revisit_total)
+        m2.metric("Total Attended", attended_total)
+        m3.metric("Calls Answered", calls_answered_total)
+        m4.metric("Calls Unanswered", calls_unanswered_total)
+
+        st.markdown("<div class='section-title'>📈 Outcome</div>", unsafe_allow_html=True)
+
+        o1, o2 = st.columns(2)
+        cancel = o1.number_input("Today’s Cancellation", min_value=0, step=1, value=0)
+        booking = o2.number_input("Today’s Booking", min_value=0, step=1, value=0)
+
+        st.markdown("<div class='section-title'>🎉 Festival (optional)</div>", unsafe_allow_html=True)
+
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            festival_1 = festival_input_block("Festival 1", "festival1")
+        with f2:
+            festival_2 = festival_input_block("Festival 2", "festival2")
+        with f3:
+            festival_3 = festival_input_block("Festival 3", "festival3")
+
+        fest_list = [x for x in [festival_1, festival_2, festival_3] if x]
+
+        if len(set(map(str.lower, fest_list))) != len(fest_list):
+            st.warning("⚠️ Same festival selected multiple times. It will be saved as-is.")
+
+        total_visits = int(cp_visits + walkin + refs + digital + newspaper + revisit_total)
+
+        b1, b2 = st.columns(2)
+        b1.success(f"📌 Total Visits = {total_visits}")
+        b2.info(f"🗓️ Day = {d.strftime('%A')}")
+
+        submit = st.form_submit_button("✅ Submit Entry", type="primary")
+
+    # ============================================================
+    # Submit handler
+    # ============================================================
+    if submit:
+        try:
+            payload = {
+                "visit_date": _date_to_iso(d),
+                "month": _month_label(d),
+                "day": d.strftime("%A"),
+
+                "cp_visits": int(_to_int(cp_visits)),
+                "direct_walk_in": int(_to_int(walkin)),
+                "references_count": int(_to_int(refs)),
+                "digital": int(_to_int(digital)),
+                "newspaper": int(_to_int(newspaper)),
+
+                "todays_cancellation": int(_to_int(cancel)),
+                "todays_booking": int(_to_int(booking)),
+
+                "total_revisits": int(_to_int(revisit_total)),
+                "tejas_p_revisits": int(_to_int(revisits["tejas_p"])),
+                "komal_k_revisits": int(_to_int(revisits["komal_k"])),
+                "ashutosh_s_revisits": int(_to_int(revisits["ashutosh_s"])),
+                "sailee_d_revisits": int(_to_int(revisits["sailee_d"])),
+
+                "total_attended": int(_to_int(attended_total)),
+                "tejas_p_attended": int(_to_int(attended["tejas_p"])),
+                "komal_k_attended": int(_to_int(attended["komal_k"])),
+                "ashutosh_s_attended": int(_to_int(attended["ashutosh_s"])),
+                "sailee_d_attended": int(_to_int(attended["sailee_d"])),
+
+                "total_calls_answered": int(_to_int(calls_answered_total)),
+                "tejas_p_calls_answered": int(_to_int(calls_answered["tejas_p"])),
+                "komal_k_calls_answered": int(_to_int(calls_answered["komal_k"])),
+                "ashutosh_s_calls_answered": int(_to_int(calls_answered["ashutosh_s"])),
+                "sailee_d_calls_answered": int(_to_int(calls_answered["sailee_d"])),
+
+                "total_calls_unanswered": int(_to_int(calls_unanswered_total)),
+                "tejas_p_calls_unanswered": int(_to_int(calls_unanswered["tejas_p"])),
+                "komal_k_calls_unanswered": int(_to_int(calls_unanswered["komal_k"])),
+                "ashutosh_s_calls_unanswered": int(_to_int(calls_unanswered["ashutosh_s"])),
+                "sailee_d_calls_unanswered": int(_to_int(calls_unanswered["sailee_d"])),
+
+                "festival_1": festival_1 or None,
+                "festival_2": festival_2 or None,
+                "festival_3": festival_3 or None,
+
+                "total_visits": int(total_visits),
+            }
+
+            existing_rows = _fetch_existing_daily_visit(d)
+
+            if existing_rows:
+                latest_row = existing_rows[0]
+                row_id = latest_row.get("id")
+
+                if row_id is None:
+                    st.error("❌ Existing row found, but id is missing. Cannot update.")
+                else:
+                    _update_daily_visit(row_id, payload)
+
+                    if len(existing_rows) > 1:
+                        st.warning(
+                            f"⚠️ Multiple rows found for {d.strftime('%d/%m/%Y')}. "
+                            f"Updated latest row id: {row_id}."
+                        )
+
+                    st.success("✅ Updated successfully.")
+            else:
+                _insert_daily_visit(payload)
+                st.success("✅ Saved successfully.")
+
+            # Clear Streamlit caches if your other tabs use cached Daily Visits data
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+
+        except Exception as e:
+            st.error(f"❌ Error saving Daily Visits entry: {e}")
+
+    # ============================================================
+    # Recent entries preview
+    # ============================================================
+    st.markdown("---")
+    st.subheader("📋 Recent Daily Visit Entries")
+
+    recent_df = _load_recent_daily_visits(limit=10)
+
+    if recent_df.empty:
+        st.info("No Daily Visits entries found yet.")
+    else:
+        preferred_cols = [
+            "visit_date",
+            "month",
+            "day",
+            "cp_visits",
+            "direct_walk_in",
+            "references_count",
+            "digital",
+            "newspaper",
+            "total_revisits",
+            "total_attended",
+            "total_calls_answered",
+            "total_calls_unanswered",
+            "todays_cancellation",
+            "todays_booking",
+            "total_visits",
+        ]
+
+        show_cols = [c for c in preferred_cols if c in recent_df.columns]
+        display_df = recent_df[show_cols].copy()
+
+        rename_map = {
+            "visit_date": "Date",
+            "month": "Month",
+            "day": "Day",
+            "cp_visits": "CP Visits",
+            "direct_walk_in": "Direct Walk-in",
+            "references_count": "References",
+            "digital": "Digital",
+            "newspaper": "Newspaper",
+            "total_revisits": "Total Revisits",
+            "total_attended": "Total Attended",
+            "total_calls_answered": "Calls Answered",
+            "total_calls_unanswered": "Calls Unanswered",
+            "todays_cancellation": "Today's Cancellation",
+            "todays_booking": "Today's Booking",
+            "total_visits": "Total Visits",
+        }
+
+        display_df = display_df.rename(columns=rename_map)
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
