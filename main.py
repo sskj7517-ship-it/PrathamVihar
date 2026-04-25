@@ -317,7 +317,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # Create tabs - same sequence as old app
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
     "**Dashboard**",
     "**Calculators**",
     "**Booking Punch**",
@@ -326,9 +326,6 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13
     "**CP Payout Tracker**",
     "**Marketing**",
     "**Civil Changes Lookup**",
-    "**Monthly Marketing Input**",
-    "**Marketing Plan Summary**",
-    "**Secure Tab**",
     "**Agreement Document Editor**",
     "**Pratham Vihar AI**",
     "**Daily Visits**",
@@ -18397,7 +18394,7 @@ def is_filled_agreement(i: int) -> bool:
 #     below code
 # ============================================================
 
-with tab12:
+with tab9:
     st.session_state.setdefault("t12_bulk_zip_bytes", None)
     st.session_state.setdefault("t12_bulk_zip_name", None)
 
@@ -20166,7 +20163,7 @@ def _sheet_ai_router(question: str, all_dfs: dict):
 # ============================================================
 # TAB 13 UI
 # ============================================================
-with tab13:
+with tab10:
     st.subheader("🤖 Pratham Vihar AI")
     st.caption(
         "Ask anything about Booking, Daily Visits, CP Payout, and Marketing data. "
@@ -20336,7 +20333,7 @@ with tab13:
 # TAB 14 — Daily Visits
 # Supabase table: public.daily_visits
 # =========================
-with tab14:
+with tab11:
     import datetime
     import pandas as pd
     import streamlit as st
@@ -22530,7 +22527,7 @@ def _render_inventory_details_table(wing_df):
 # ------------------------------------------------------------
 # TAB UI
 # ------------------------------------------------------------
-with tab15:
+with tab12:
     st.markdown("## Inventory Status")
 
     if "supabase" not in globals() or supabase is None:
@@ -22588,7 +22585,7 @@ with tab15:
 #   cashflow_slab_master
 # ============================================================
 
-with tab16:
+with tab13:
     import datetime
     from html import escape
 
