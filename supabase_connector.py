@@ -3,7 +3,7 @@ import pandas as pd
 from supabase import create_client, Client
 
 SUPABASE_URL = "https://wfyzspnfijrfwuhmlzka.supabase.co"
-SUPABASE_KEY = "paste_your_publishable_key_here"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndmeXpzcG5maWpyZnd1aG1semthIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxMDA2NDksImV4cCI6MjA5MjY3NjY0OX0.kbMDhr3sBW9sGuHCDpBEYqbF7kSA-Dcf8WiX_5MuyuY"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
