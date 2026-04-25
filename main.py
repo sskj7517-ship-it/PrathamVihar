@@ -944,55 +944,37 @@ with tab1:
     from datetime import date, timedelta, timezone, datetime as dt_datetime
     from typing import Dict, List, Optional, Tuple
 
-    SALE_FACTOR = 1.38  # saleable area = Carpet * 1.38
+    SALE_FACTOR = 1.38
 
-    # ---- connection checks ----
+    # ==========================================================
+    # SUPABASE DATA LOAD
+    # ==========================================================
     if not sheets_connected:
         st.warning("📋 Please connect to Supabase to view dashboard data.")
+        st.stop()
+
+    try:
+        response = supabase.table("bookings").select("*").order("id", desc=False).execute()
+        raw_data = response.data or []
+        sheet_df = pd.DataFrame(raw_data)
+    except Exception as e:
+        st.error(f"❌ Error loading Supabase bookings: {e}")
         st.stop()
 
     if sheet_df.empty:
         st.warning("No booking data available yet.")
         st.stop()
 
-    # ---- GLOBAL SMALL STYLES ----
-    st.markdown("""
-    <style>
-      .metric-card { background: #fff; padding: 16px; border-radius: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-                     text-align: center; margin-bottom: 14px; border: 1px solid #e5e7eb; }
-      .metric-card h3 { font-size: 16px; font-weight: 700; color: #374151; margin: 0 0 6px 0; }
-      .metric-card p { font-size: 22px; font-weight: 900; color: #111827; margin: 0; }
-      .metric-sub { font-size: 12px; color: #6b7280; font-weight: 600; margin-top: 4px; }
-      .section-subtitle { font-weight: 800; font-size: 18px; margin: 14px 0 8px 0; color: #0f172a; }
-      .styled-table { border-collapse: collapse; width: 100%; border-radius: 12px; overflow: hidden;
-                      box-shadow: 0 4px 10px rgba(0,0,0,.08); margin: 15px 0; }
-      .styled-table th { background: #2563eb; color: white; text-align: left; padding: 10px; font-size: 14px; }
-      .styled-table td { padding: 10px; font-size: 13px; border-bottom: 1px solid #e2e8f0; }
-      .styled-table tr:nth-child(even) { background: #f8fafc; }
-      .styled-table tr:last-child td { font-weight: 700; background: #f1f5f9; }
-      .chips{display:flex; flex-wrap:wrap; gap:8px; margin:10px 0;}
-      .chip{display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid #e5e7eb;
-            border-radius:999px; background:#f8fafc; font-size:12px; font-weight:700; color:#111827;}
-      .chip .dot{width:8px; height:8px; border-radius:999px; background:#6366f1;}
-      .chip.ok .dot{background:#10b981;}
-      .chip.warn .dot{background:#f59e0b;}
-      .list-wrap { text-align:left; margin-top:6px }
-      .list-wrap ul{ margin:6px 0 0; padding-left:18px; text-align:left }
-      .list-wrap li{ font-size:13px; font-weight:700; color:#111827; margin:4px 0 }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # ---- DATA PREP ----
-    df = sheet_df.copy()
-
-    # Convert Supabase column names to old Google Sheet names
-    supabase_to_old_cols = {
+    # ==========================================================
+    # SUPABASE COLUMNS → OLD APP COLUMN NAMES
+    # ==========================================================
+    sheet_df = sheet_df.rename(columns={
         "booking_date": "Date",
         "customer_name": "Customer Name",
         "wing": "Wing",
         "floor": "Floor",
         "flat_number": "Flat Number",
-        "unit_type": "Type",
+        "type": "Type",
         "final_price": "Final Price",
         "rate": "Rate",
         "agreement_cost": "Agreement Cost",
@@ -1033,85 +1015,152 @@ with tab1:
         "location": "Location",
         "visit_count": "Visit Count",
         "received_amount": "Received Amount",
-        "stamp_duty_percent": "Stamp Duty %"
-    }
+        "stamp_duty_percent": "Stamp Duty %",
+    })
 
-    df = df.rename(columns=supabase_to_old_cols)
-
-    required_old_cols = [
+    # ==========================================================
+    # REQUIRED OLD-CODE COMPATIBILITY COLUMNS
+    # ==========================================================
+    old_required_cols = [
         "Date", "Customer Name", "Wing", "Floor", "Flat Number", "Type",
-        "Final Price", "Rate", "Agreement Cost", "Lead Type",
-        "Sales Executive", "month", "Civil Changes", "Offer 1", "Offer 2",
-        "Offer 1 Rewarded", "Offer 2 Rewarded", "Referral Given",
-        "Stamp Duty", "Agreement Done", "Incentive", "RCC",
-        "POSSESSION HANDOVER", "Insider Banker", "Outsider Banker",
-        "Carpet Area", "First Visit Date", "Conversion Period (days)",
-        "Parking Number", "Merged Units", "Location", "Visit Count"
+        "Final Price", "Rate", "Agreement Cost", "Lead Type", "Sales Executive",
+        "month", "Civil Changes", "Offer 1", "Offer 2", "Offer 1 Rewarded",
+        "Offer 2 Rewarded", "Referral Given", "Stamp Duty", "Agreement Done",
+        "Incentive", "RCC", "POSSESSION HANDOVER", "Insider Banker",
+        "Outsider Banker", "Carpet Area", "BOOKING AMOUNT", "AGREEMENT",
+        "PLINTH", "3RD FLOOR", "7TH FLOOR", "10TH FLOOR", "13TH FLOOR",
+        "FLOORING", "PLASTERING", "PLUMBING", "ELECTRICAL", "SANITARY & LIFT",
+        "POSSESSION", "First Visit Date", "Conversion Period (days)",
+        "Parking Number", "Merged Units", "Location", "Visit Count",
+        "Received Amount", "Stamp Duty %"
     ]
 
-    for col in required_old_cols:
-        if col not in df.columns:
-            df[col] = ""
+    for col in old_required_cols:
+        if col not in sheet_df.columns:
+            sheet_df[col] = ""
 
-    def bool_to_status(value, true_text):
-        if value is True:
-            return true_text
-        if value is False or value is None:
+    # ==========================================================
+    # DATE CONVERSION
+    # ==========================================================
+    sheet_df["Date"] = pd.to_datetime(sheet_df["Date"], errors="coerce")
+    sheet_df["First Visit Date"] = pd.to_datetime(sheet_df["First Visit Date"], errors="coerce")
+
+    # ==========================================================
+    # MONTH / QUARTER COMPATIBILITY
+    # ==========================================================
+    if "month" in sheet_df.columns:
+        sheet_df["month"] = sheet_df["month"].fillna("").astype(str).str.strip()
+    else:
+        sheet_df["month"] = ""
+
+    sheet_df["Month"] = sheet_df["month"]
+    sheet_df["MonthYear"] = sheet_df["month"]
+
+    def get_custom_quarter_label(d):
+        if pd.isna(d):
             return ""
-        return str(value)
+        m = int(d.month)
+        y = int(d.year)
 
-    df["Agreement Done"] = df["Agreement Done"].apply(lambda x: bool_to_status(x, "Done"))
-    df["POSSESSION HANDOVER"] = df["POSSESSION HANDOVER"].apply(lambda x: bool_to_status(x, "Handover"))
-    df["Referral Given"] = df["Referral Given"].apply(lambda x: bool_to_status(x, "Given"))
-    df["Offer 1 Rewarded"] = df["Offer 1 Rewarded"].apply(lambda x: bool_to_status(x, "Rewarded 1"))
-    df["Offer 2 Rewarded"] = df["Offer 2 Rewarded"].apply(lambda x: bool_to_status(x, "Rewarded 2"))
+        if 4 <= m <= 6:
+            return f"Q1 APR {str(y)[-2:]} - JUN {str(y)[-2:]}"
+        elif 7 <= m <= 9:
+            return f"Q2 JUL {str(y)[-2:]} - SEP {str(y)[-2:]}"
+        elif 10 <= m <= 12:
+            return f"Q3 OCT {str(y)[-2:]} - DEC {str(y)[-2:]}"
+        else:
+            return f"Q4 JAN {str(y)[-2:]} - MAR {str(y)[-2:]}"
 
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-    df['Month'] = df['Date'].dt.strftime("%B %y")
-    df['Quarter'] = df['Date'].apply(get_custom_quarter_label)
-    df['MonthYear'] = df['Date'].dt.strftime("%B %y")
-    df['Rate'] = pd.to_numeric(df['Rate'], errors='coerce')
+    sheet_df["Quarter"] = sheet_df["Date"].apply(get_custom_quarter_label)
 
-    # Clean Agreement Cost & Carpet Area for PSF calc
-    df['Agreement Cost'] = pd.to_numeric(df['Agreement Cost'], errors='coerce').fillna(0.0)
-    df['Carpet Area'] = pd.to_numeric(df['Carpet Area'], errors='coerce').fillna(0.0)
+    # ==========================================================
+    # TEXT STATUS COLUMNS — NO BOOL
+    # ==========================================================
+    text_cols = [
+        "Customer Name", "Wing", "Flat Number", "Type", "Lead Type",
+        "Sales Executive", "month", "Month", "MonthYear", "Quarter",
+        "Civil Changes", "Offer 1", "Offer 2", "Offer 1 Rewarded",
+        "Offer 2 Rewarded", "Referral Given", "Stamp Duty",
+        "Agreement Done", "Incentive", "RCC", "POSSESSION HANDOVER",
+        "Insider Banker", "Outsider Banker", "Parking Number",
+        "Merged Units", "Location"
+    ]
 
-    # Normalize status cols
-    df['Agreement Done'] = df['Agreement Done'].fillna('').astype(str).str.strip().str.lower()
-    df['Stamp Duty'] = df['Stamp Duty'].fillna('').astype(str).str.strip().str.lower()
+    for col in text_cols:
+        if col in sheet_df.columns:
+            sheet_df[col] = sheet_df[col].fillna("").astype(str).str.strip()
 
-    # Final Price cleaning (Lakhs → ₹ full amount)
-    df['_FinalPrice_L'] = pd.to_numeric(df['Final Price'], errors='coerce')
-    df['_FinalPrice_Full'] = (df['_FinalPrice_L'] * 100000).astype('float')
+    # ==========================================================
+    # NUMERIC COLUMNS
+    # ==========================================================
+    numeric_cols = [
+        "Floor", "Final Price", "Rate", "Agreement Cost", "Carpet Area",
+        "BOOKING AMOUNT", "AGREEMENT", "PLINTH", "3RD FLOOR",
+        "7TH FLOOR", "10TH FLOOR", "13TH FLOOR", "FLOORING",
+        "PLASTERING", "PLUMBING", "ELECTRICAL", "SANITARY & LIFT",
+        "POSSESSION", "Conversion Period (days)", "Visit Count",
+        "Received Amount", "Stamp Duty %"
+    ]
 
-    # Totals
-    total_carpet_area = df['Carpet Area'].sum()
+    for col in numeric_cols:
+        if col in sheet_df.columns:
+            sheet_df[col] = pd.to_numeric(sheet_df[col], errors="coerce")
+
+    # ==========================================================
+    # OLD TAB 1 DATA PREP STARTS HERE
+    # ==========================================================
+    df = sheet_df.copy()
+
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df["Month"] = df["Month"].fillna("").astype(str).str.strip()
+    df["MonthYear"] = df["MonthYear"].fillna("").astype(str).str.strip()
+    df["Quarter"] = df["Quarter"].fillna("").astype(str).str.strip()
+    df["Rate"] = pd.to_numeric(df["Rate"], errors="coerce")
+
+    df["Agreement Cost"] = pd.to_numeric(df["Agreement Cost"], errors="coerce").fillna(0.0)
+    df["Carpet Area"] = pd.to_numeric(df["Carpet Area"], errors="coerce").fillna(0.0)
+
+    df["Agreement Done"] = df["Agreement Done"].fillna("").astype(str).str.strip().str.lower()
+    df["Stamp Duty"] = df["Stamp Duty"].fillna("").astype(str).str.strip().str.lower()
+    df["Incentive"] = df["Incentive"].fillna("").astype(str).str.strip().str.lower()
+    df["RCC"] = df["RCC"].fillna("").astype(str).str.strip().str.lower()
+    df["POSSESSION HANDOVER"] = df["POSSESSION HANDOVER"].fillna("").astype(str).str.strip().str.lower()
+    df["Referral Given"] = df["Referral Given"].fillna("").astype(str).str.strip().str.lower()
+    df["Insider Banker"] = df["Insider Banker"].fillna("").astype(str).str.strip().str.lower()
+    df["Outsider Banker"] = df["Outsider Banker"].fillna("").astype(str).str.strip().str.lower()
+
+    df["_FinalPrice_L"] = pd.to_numeric(df["Final Price"], errors="coerce")
+    df["_FinalPrice_Full"] = df["_FinalPrice_L"] * 100000
+
+    total_carpet_area = df["Carpet Area"].sum()
     total_bookings = len(df)
-    agreement_done_count = (df['Agreement Done'] == 'done').sum()
-    agreement_pending_count = (df['Agreement Done'] != 'done').sum()
-    stamp_duty_received = (df['Stamp Duty'] == 'received').sum()
-    stamp_duty_pending = (df['Stamp Duty'] != 'received').sum()
+
+    agreement_done_count = (df["Agreement Done"] == "done").sum()
+    agreement_pending_count = (df["Agreement Done"] != "done").sum()
+
+    stamp_duty_received = (df["Stamp Duty"] == "received").sum()
+    stamp_duty_pending = (df["Stamp Duty"] != "received").sum()
+
     total_stamp_duty = int(stamp_duty_received + stamp_duty_pending)
     total_agreements = int(agreement_done_count + agreement_pending_count)
 
-    # Avg conversion days
     avg_conv_days_display = "—"
-    if 'Conversion Period (days)' in df.columns:
-        conv_series = pd.to_numeric(df['Conversion Period (days)'], errors='coerce')
+    if "Conversion Period (days)" in df.columns:
+        conv_series = pd.to_numeric(df["Conversion Period (days)"], errors="coerce")
         if conv_series.notna().any():
             avg_conv_days_display = round(conv_series.mean(), 1)
 
-    # Month ordering
-    df['Month_dt'] = df['Date'].dt.to_period('M')
-    month_order = sorted([m for m in df['Month_dt'].unique() if pd.notna(m)])
+    df["Month_dt"] = df["Date"].dt.to_period("M")
+    month_order = sorted([m for m in df["Month_dt"].unique() if pd.notna(m)])
     ordered_months = [pd.to_datetime(str(m)).strftime("%B %y") for m in month_order]
-    df['Month'] = pd.Categorical(df['Month'], categories=ordered_months, ordered=True)
 
-    wing_wise = df['Wing'].value_counts()
-    month_wise = df['Month'].value_counts().sort_index()
-    type_wise = df['Type'].value_counts()
-    sales_exec_wise = df['Sales Executive'].value_counts()
+    if ordered_months:
+        df["Month"] = pd.Categorical(df["Month"], categories=ordered_months, ordered=True)
 
+    wing_wise = df["Wing"].astype(str).str.strip().value_counts()
+    month_wise = df["Month"].value_counts().sort_index()
+    type_wise = df["Type"].astype(str).str.strip().value_counts()
+    sales_exec_wise = df["Sales Executive"].astype(str).str.strip().value_counts()
     # ==========================================================
     # INVENTORY CONSTANTS / HELPERS (B/C & podium included)
     # ==========================================================
@@ -2235,7 +2284,7 @@ with tab1:
                 df.dropna(subset=['Quarter'])
                   .groupby('Quarter')
                   .apply(lambda s: avg_psf(s))
-                  .reset_index(name='PSF')
+                  .rename("PSF").reset_index()
             )
             if not q_psf.empty:
                 q_psf['Quarter'] = pd.Categorical(q_psf['Quarter'], categories=ordered_quarters, ordered=True)
@@ -2390,7 +2439,7 @@ with tab1:
                   .groupby('Month')
                   .apply(lambda s: avg_psf(s))
                   .reindex(ordered_months)
-                  .reset_index(name='PSF')
+                  .rename("PSF").reset_index()
             ).dropna(subset=['PSF'])
     
             if not monthly_psf.empty:
@@ -2535,7 +2584,7 @@ with tab1:
                 df.dropna(subset=['Quarter', 'Wing'])
                   .groupby(['Quarter', 'Wing'])
                   .apply(lambda s: avg_psf(s))
-                  .reset_index(name='PSF')
+                  .rename("PSF").reset_index()
             )
             if not qw_psf.empty:
                 qw_psf['Quarter'] = pd.Categorical(qw_psf['Quarter'], categories=ordered_quarters, ordered=True)
@@ -4359,7 +4408,7 @@ with tab1:
                         df_ag.dropna(subset=['Quarter'])
                              .groupby('Quarter')
                              .apply(lambda s: avg_psf(s))
-                             .reset_index(name='PSF')
+                             .rename("PSF").reset_index()
                     )
                     if not q_psf.empty:
                         q_psf['Quarter'] = pd.Categorical(q_psf['Quarter'], categories=ordered_quarters_ag, ordered=True)
@@ -4490,7 +4539,7 @@ with tab1:
                              .groupby('Month')
                              .apply(lambda s: avg_psf(s))
                              .reindex(ordered_months)
-                             .reset_index(name='PSF')
+                             .rename("PSF").reset_index()
                     ).dropna(subset=['PSF'])
     
                     if not monthly_psf_ag.empty:
@@ -4631,7 +4680,7 @@ with tab1:
                         df_ag.dropna(subset=['Quarter', 'Wing'])
                              .groupby(['Quarter', 'Wing'])
                              .apply(lambda s: avg_psf(s))
-                             .reset_index(name='PSF')
+                             .rename("PSF").reset_index()
                     )
                     if not qw_psf.empty:
                         qw_psf['Quarter'] = pd.Categorical(qw_psf['Quarter'], categories=ordered_quarters_ag, ordered=True)
