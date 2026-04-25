@@ -2,12 +2,10 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 
-
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_ANON_KEY"]
+SUPABASE_URL = "https://wfyzspnfijrfwuhmlzka.supabase.co"
+SUPABASE_KEY = "paste_your_publishable_key_here"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 
 def load_table(table_name: str) -> pd.DataFrame:
     try:
