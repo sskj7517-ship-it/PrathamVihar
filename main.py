@@ -5930,3 +5930,1534 @@ with tab1:
                 )
             else:
                 st.info('Required columns ("Wing" and "Merged Units") not found in df, so Wing-wise Merged chart was skipped.')
+    with TAB_MONTHLY:
+        st.header("🧾 Monthly Stamp Duty & Agreement Status")
+        st.markdown("<div class='section-subtitle'>📅 Monthly Stamp Duty & Agreement Status</div>", unsafe_allow_html=True)
+
+        if 'MonthYear' in df.columns and not df.empty:
+            month_options = sorted(df['MonthYear'].dropna().unique().tolist())
+            if month_options:
+                selected_month = st.selectbox("Select Month", month_options)
+                monthly_df = df[df['MonthYear'] == selected_month]
+                if monthly_df.empty:
+                    st.info("No records for the selected month.")
+                    st.stop()
+
+                executives_list = sorted(
+                    [
+                        str(x).strip()
+                        for x in df["Sales Executive"].dropna().unique().tolist()
+                        if str(x).strip() != "" and str(x).strip().upper() != "NAN"
+                    ]
+                )
+
+                # --- Table summary ---
+                summary_stats = []
+                for exec_name in executives_list:
+                    exec_data = monthly_df[monthly_df['Sales Executive'] == exec_name]
+                    stamp_duty_received_cnt = (exec_data['Stamp Duty'].str.lower() == 'received').sum()
+                    stamp_duty_pending_cnt = len(exec_data) - stamp_duty_received_cnt
+                    agreement_done_cnt = (exec_data['Agreement Done'].str.lower() == 'done').sum()
+                    agreement_pending_cnt = len(exec_data) - agreement_done_cnt
+                    summary_stats.append({
+                        "Sales Executive": exec_name,
+                        "Stamp Duty Received": stamp_duty_received_cnt,
+                        "Stamp Duty Pending": stamp_duty_pending_cnt,
+                        "Agreement Done": agreement_done_cnt,
+                        "Agreement Pending": agreement_pending_cnt
+                    })
+                monthly_summary_df = pd.DataFrame(summary_stats)
+                st.markdown(monthly_summary_df.to_html(index=False, classes="styled-table"), unsafe_allow_html=True)
+
+                # ---- Charts ----
+                stats_df = monthly_summary_df.copy()
+                stats_df["Stamp Duty Total"] = stats_df["Stamp Duty Received"] + stats_df["Stamp Duty Pending"]
+                stats_df["Agreement Total"]  = stats_df["Agreement Done"] + stats_df["Agreement Pending"]
+
+                st.markdown("<div class='section-subtitle'>📦 Stamp Duty Status by Sales Executive</div>", unsafe_allow_html=True)
+                stamp_long = stats_df.melt(
+                    id_vars="Sales Executive",
+                    value_vars=["Stamp Duty Total", "Stamp Duty Received", "Stamp Duty Pending"],
+                    var_name="Metric",
+                    value_name="Count"
+                ).replace({"Metric": {
+                    "Stamp Duty Total": "Total", "Stamp Duty Received": "Received", "Stamp Duty Pending": "Pending"
+                }})
+                stamp_bar = alt.Chart(stamp_long).mark_bar().encode(
+                    x=alt.X('Sales Executive:N', title='Sales Executive',
+                            axis=alt.Axis(labelAngle=0, labelLimit=160, labelOverlap=True),
+                            scale=alt.Scale(paddingInner=0.35, paddingOuter=0.35)),
+                    xOffset='Metric:N',
+                    y=alt.Y('Count:Q', title='Units'),
+                    color=alt.Color('Metric:N',
+                                    scale=alt.Scale(domain=["Total","Received","Pending"], range=["#6366f1","#10b981","#f59e0b"]),
+                                    legend=alt.Legend(title="", orient='top')),
+                    tooltip=['Sales Executive:N', 'Metric:N', 'Count:Q']
+                )
+                stamp_text = alt.Chart(stamp_long).mark_text(
+                    dy=-6, fontSize=12, fontWeight='bold', color='#0f172a'
+                ).encode(x='Sales Executive:N', xOffset='Metric:N', y='Count:Q', text='Count:Q')
+                st.altair_chart(
+                    (stamp_bar + stamp_text).properties(
+                        title=alt.TitleParams("Stamp Duty Status by Sales Executive", anchor='start', fontSize=16, fontWeight='bold', dy=-5),
+                        height=340, width=alt.Step(80)
+                    ).configure_title(anchor='start'),
+                    use_container_width=True
+                )
+
+                st.markdown("<div class='section-subtitle'>📝 Agreement Status by Sales Executive</div>", unsafe_allow_html=True)
+                agree_long = stats_df.melt(
+                    id_vars="Sales Executive",
+                    value_vars=["Agreement Total", "Agreement Done", "Agreement Pending"],
+                    var_name="Metric",
+                    value_name="Count"
+                ).replace({"Metric": {
+                    "Agreement Total": "Total", "Agreement Done": "Done", "Agreement Pending": "Pending"
+                }})
+                agree_bar = alt.Chart(agree_long).mark_bar().encode(
+                    x=alt.X('Sales Executive:N', title='Sales Executive',
+                            axis=alt.Axis(labelAngle=0, labelLimit=160, labelOverlap=True),
+                            scale=alt.Scale(paddingInner=0.35, paddingOuter=0.35)),
+                    xOffset='Metric:N',
+                    y=alt.Y('Count:Q', title='Units'),
+                    color=alt.Color('Metric:N',
+                                    scale=alt.Scale(domain=["Total","Done","Pending"], range=["#6366f1","#10b981","#f59e0b"]),
+                                    legend=alt.Legend(title="", orient='top')),
+                    tooltip=['Sales Executive:N', 'Metric:N', 'Count:Q']
+                )
+                agree_text = alt.Chart(agree_long).mark_text(
+                    dy=-6, fontSize=12, fontWeight='bold', color='#0f172a'
+                ).encode(x='Sales Executive:N', xOffset='Metric:N', y='Count:Q', text='Count:Q')
+                st.altair_chart(
+                    (agree_bar + agree_text).properties(
+                        title=alt.TitleParams("Agreement Status by Sales Executive", anchor='start', fontSize=16, fontWeight='bold', dy=-5),
+                        height=340, width=alt.Step(80)
+                    ).configure_title(anchor='start'),
+                    use_container_width=True
+                )
+            else:
+                st.info("No valid months available for selection.")
+        else:
+            st.warning("Month data is missing or empty.")
+
+        # ---- NEW: Overall Funding Source chart (Insider / Outsider / Self Funded) ----
+        st.markdown("<div class='section-subtitle'>🏦 Funding Source by Sales Executive — Overall</div>", unsafe_allow_html=True)
+    
+        req_cols = ['Sales Executive', 'Insider Banker', 'Outsider Banker']
+        missing_funding_cols = [c for c in req_cols if c not in df.columns]
+        if missing_funding_cols:
+            st.warning(f"Missing columns for funding chart: {', '.join(missing_funding_cols)}")
+        else:
+            def _funding_overall(row):
+                ib = str(row.get('Insider Banker', '')).strip().lower()
+                ob = str(row.get('Outsider Banker', '')).strip().lower()
+                if ib == 'yes':
+                    return 'Insider Banker'
+                elif ob == 'yes':
+                    return 'Outsider Banker'
+                else:
+                    return 'Self Funded'
+    
+            fdf_all = df.copy()
+            fdf_all['Sales Executive'] = fdf_all['Sales Executive'].astype(str).str.strip()
+            fdf_all = fdf_all[fdf_all['Sales Executive'].ne('')]
+    
+            if fdf_all.empty:
+                st.info("No Sales Executive entries to chart funding.")
+            else:
+                fdf_all['Funding'] = fdf_all.apply(_funding_overall, axis=1)
+    
+                FUNDING_DOMAIN = ['Insider Banker', 'Outsider Banker', 'Self Funded']
+                funding_counts_all = (fdf_all
+                                      .groupby(['Sales Executive','Funding'])
+                                      .size()
+                                      .reset_index(name='Count'))
+                funding_counts_all['Funding'] = pd.Categorical(
+                    funding_counts_all['Funding'], categories=FUNDING_DOMAIN, ordered=True
+                )
+    
+                base = alt.Chart(funding_counts_all)
+                bars = base.mark_bar(size=16).encode(
+                    x=alt.X('Sales Executive:N', title='Sales Executive',
+                            axis=alt.Axis(labelAngle=0, labelLimit=160, labelOverlap=True),
+                            scale=alt.Scale(paddingInner=0.35, paddingOuter=0.35)),
+                    xOffset=alt.X('Funding:N', sort=FUNDING_DOMAIN, title=None),
+                    y=alt.Y('Count:Q', title='Bookings'),
+                    color=alt.Color('Funding:N',
+                                    scale=alt.Scale(domain=FUNDING_DOMAIN,
+                                                    range=['#2563eb', '#f59e0b', '#10b981']),
+                                    legend=alt.Legend(title='Funding')),
+                    tooltip=[
+                        alt.Tooltip('Sales Executive:N', title='Sales Executive'),
+                        alt.Tooltip('Funding:N'),
+                        alt.Tooltip('Count:Q', title='Count')
+                    ]
+                )
+                labels = base.mark_text(
+                    dy=-6, fontSize=12, fontWeight='bold', color='#0f172a'
+                ).encode(
+                    x=alt.X('Sales Executive:N',
+                            axis=alt.Axis(labelAngle=0, labelLimit=160, labelOverlap=True)),
+                    xOffset=alt.X('Funding:N', sort=FUNDING_DOMAIN),
+                    y='Count:Q',
+                    text='Count:Q'
+                )
+    
+                st.altair_chart(
+                    (bars + labels).properties(
+                        title=alt.TitleParams("Funding Source by Sales Executive — Overall",
+                                              anchor='start', fontSize=16, fontWeight='bold', dy=-5),
+                        height=340, width=alt.Step(80)
+                    ).configure_title(anchor='start'),
+                    use_container_width=True
+                )
+
+        # === Monthwise: Bookings vs Stamp Duty Received vs Agreement Done (single chart) ===
+        st.markdown("<div class='section-subtitle'>📊 Monthwise: Bookings, Stamp Duty Received, Agreement Done</div>", unsafe_allow_html=True)
+        
+        needed_cols = {'MonthYear', 'Stamp Duty', 'Agreement Done'}
+        if not needed_cols.issubset(df.columns):
+            st.info("Missing columns for monthwise combined graph (need MonthYear, Stamp Duty, Agreement Done).")
+        else:
+            # Ensure ordering matches the rest of the app
+            month_order_local = [m for m in ordered_months if m in df['MonthYear'].unique().tolist()]
+            if not month_order_local:
+                # Fallback if ordered_months isn't populated
+                month_order_local = sorted(
+                    df['MonthYear'].dropna().unique().tolist(),
+                    key=lambda x: pd.to_datetime(x, format="%B %y", errors='coerce')
+                )
+        
+            dfx = df.dropna(subset=['MonthYear']).copy()
+            dfx['MonthYear'] = pd.Categorical(dfx['MonthYear'], categories=month_order_local, ordered=True)
+        
+            # Aggregations per month
+            grp = dfx.groupby('MonthYear', observed=True)
+        
+            month_bookings = grp.size().rename('Bookings').reset_index()
+        
+            month_sd = grp['Stamp Duty'].apply(
+                lambda s: int((s.astype(str).str.lower().str.strip() == 'received').sum())
+            ).rename('Stamp Duty Received').reset_index()
+        
+            month_ag = grp['Agreement Done'].apply(
+                lambda s: int((s.astype(str).str.lower().str.strip() == 'done').sum())
+            ).rename('Agreement Done').reset_index()
+        
+            # Merge and ONLY fill numeric columns
+            m_all = (month_bookings
+                     .merge(month_sd, on='MonthYear', how='outer')
+                     .merge(month_ag, on='MonthYear', how='outer'))
+        
+            num_cols = ['Bookings', 'Stamp Duty Received', 'Agreement Done']
+            for c in num_cols:
+                m_all[c] = pd.to_numeric(m_all[c], errors='coerce').fillna(0).astype(int)
+        
+            # Long format for grouped bars
+            m_long = m_all.melt(
+                id_vars='MonthYear',
+                value_vars=num_cols,
+                var_name='Metric',
+                value_name='Count'
+            )
+        
+            base = alt.Chart(m_long)
+            bars = base.mark_bar().encode(
+                x=alt.X('MonthYear:N', sort=month_order_local, title='Month',
+                        axis=alt.Axis(labelAngle=0, labelLimit=180, labelOverlap=True),
+                        scale=alt.Scale(paddingInner=0.35, paddingOuter=0.35)),
+                xOffset=alt.X('Metric:N'),
+                y=alt.Y('Count:Q', title='Count'),
+                color=alt.Color('Metric:N',
+                                scale=alt.Scale(
+                                    domain=['Bookings','Stamp Duty Received','Agreement Done'],
+                                    range=['#6366f1','#10b981','#f59e0b']
+                                ),
+                                legend=alt.Legend(title="", orient='top')),
+                tooltip=['MonthYear:N','Metric:N','Count:Q']
+            )
+            labels = base.mark_text(dy=-6, fontSize=12, fontWeight='bold', color='#0f172a').encode(
+                x=alt.X('MonthYear:N', sort=month_order_local),
+                xOffset='Metric:N',
+                y='Count:Q',
+                text='Count:Q'
+            )
+        
+            st.altair_chart(
+                (bars + labels).properties(
+                    title=alt.TitleParams(
+                        "Monthwise: Bookings vs Stamp Duty Received vs Agreement Done",
+                        anchor='start', fontSize=16, fontWeight='bold', dy=-5
+                    ),
+                    height=340, width=alt.Step(90)
+                ).configure_title(anchor='start'),
+                use_container_width=True
+            )
+    with TAB_OFFERS_DASH:
+    st.header("📈 Offers Dashboard")
+
+    base_df = df.copy()
+
+    required_off_cols = [
+        'Offer 1', 'Offer 2', 'Offer 1 Rewarded', 'Offer 2 Rewarded',
+        'month', 'Wing', 'Floor', 'Flat Number'
+    ]
+
+    for col in required_off_cols:
+        if col not in base_df.columns:
+            base_df[col] = ""
+
+    def _norm(x):
+        if pd.isna(x):
+            return ""
+        return str(x).strip()
+
+    tall_rows = []
+    for _, r in base_df.iterrows():
+        o1 = _norm(r.get('Offer 1'))
+        o2 = _norm(r.get('Offer 2'))
+        o1r = _norm(r.get('Offer 1 Rewarded')).lower()
+        o2r = _norm(r.get('Offer 2 Rewarded')).lower()
+
+        if o1:
+            tall_rows.append({"offer": o1, "rewarded": o1r in ["rewarded 1", "true", "yes", "1"]})
+        if o2:
+            tall_rows.append({"offer": o2, "rewarded": o2r in ["rewarded 2", "true", "yes", "1"]})
+
+    tall = pd.DataFrame(tall_rows) if tall_rows else pd.DataFrame(columns=["offer", "rewarded"])
+
+    OFFERS_LIST = [
+        "1 Gram Gold Coin",
+        "2 Gram Gold Coin",
+        "200 Gram Silver",
+        "Kitchen Trolley",
+        "25000 Electronic Voucher"
+    ]
+
+    def stats_for(name: str):
+        if tall.empty:
+            return 0, 0, 0
+        sub = tall[tall['offer'].astype(str).str.strip().str.casefold() == name.strip().casefold()]
+        tot = int(len(sub))
+        rwd = int(sub['rewarded'].sum())
+        pend = max(tot - rwd, 0)
+        return tot, rwd, pend
+
+    REF_LEAD_COL = "Lead Type"
+    REF_GIVEN_COL = "Referral Given"
+    AGREEMENT_COL = "Agreement Done"
+
+    for col in [REF_LEAD_COL, REF_GIVEN_COL, AGREEMENT_COL]:
+        if col not in base_df.columns:
+            base_df[col] = ""
+
+    ref_total_done = 0
+    ref_pending = 0
+    ref_rewarded = 0
+
+    df_ref = base_df.copy()
+
+    lead_norm = df_ref[REF_LEAD_COL].astype(str).str.strip().str.casefold()
+    is_referral = lead_norm.str.contains("ref", na=False)
+    df_ref = df_ref[is_referral]
+
+    agr_done_mask = df_ref[AGREEMENT_COL].astype(str).str.lower().str.strip() == 'done'
+    df_ref_done = df_ref[agr_done_mask].copy()
+
+    ref_total_done = int(len(df_ref_done))
+
+    given_norm = df_ref_done[REF_GIVEN_COL].astype(str).str.strip().str.casefold()
+    given_referrals = int(given_norm.str.contains("given|true|yes|1", regex=True, na=False).sum())
+    ref_pending = max(ref_total_done - given_referrals, 0)
+    ref_rewarded = max(ref_total_done - ref_pending, 0)
+
+    total_offers_count = int(len(tall)) + int(ref_total_done)
+
+    st.markdown(
+        f"<div class='metric-card'><h3>Total Offers Given</h3><p>{total_offers_count}</p></div>",
+        unsafe_allow_html=True
+    )
+
+    r7c1, r7c2, r7c3 = st.columns(3)
+    with r7c1:
+        st.markdown(
+            f"<div class='metric-card'><h3>Total Referrals</h3><p>{ref_total_done}</p></div>",
+            unsafe_allow_html=True
+        )
+    with r7c2:
+        st.markdown(
+            f"<div class='metric-card'><h3>Pending Referrals</h3><p>{ref_pending}</p></div>",
+            unsafe_allow_html=True
+        )
+    with r7c3:
+        st.markdown(
+            f"<div class='metric-card'><h3>Rewarded Referrals</h3><p>{ref_rewarded}</p></div>",
+            unsafe_allow_html=True
+        )
+
+    def render_offer_row(offer_name: str):
+        t, r, p = stats_for(offer_name)
+        c1, c2, c3 = st.columns(3)
+        c1.markdown(f"<div class='metric-card'><h3>{offer_name} — Total</h3><p>{t}</p></div>", unsafe_allow_html=True)
+        c2.markdown(f"<div class='metric-card'><h3>{offer_name} — Pending</h3><p>{p}</p></div>", unsafe_allow_html=True)
+        c3.markdown(f"<div class='metric-card'><h3>{offer_name} — Rewarded</h3><p>{r}</p></div>", unsafe_allow_html=True)
+
+    for offer_nm in OFFERS_LIST:
+        render_offer_row(offer_nm)
+
+    st.markdown("<div class='section-subtitle'>🎁 Offers Lookup</div>", unsafe_allow_html=True)
+
+    def canon_month2(s: str) -> str:
+        return str(s).strip().replace(" ", "").replace("-", "").upper() if pd.notna(s) else ""
+
+    base_df['__MonthCanon'] = base_df['month'].map(canon_month2)
+
+    months_o = ['All'] + sorted([m for m in base_df['__MonthCanon'].dropna().unique() if str(m).strip()], key=str)
+
+    wings_o = ['All'] + sorted(
+        [
+            str(x).strip()
+            for x in base_df['Wing'].dropna().unique()
+            if str(x).strip() != "" and str(x).strip().upper() != "NAN"
+        ]
+    )
+
+    floors_o = ['All'] + sorted(
+        [
+            str(x).strip()
+            for x in base_df['Floor'].dropna().unique()
+            if str(x).strip() != "" and str(x).strip().upper() != "NAN"
+        ],
+        key=lambda x: str(x)
+    )
+
+    lc1, lc2, lc3 = st.columns(3)
+    sel_wing = lc1.selectbox("Select Wing", wings_o, key="tab1_off_wing")
+    sel_floor = lc2.selectbox("Select Floor", floors_o, key="tab1_off_floor")
+    sel_month = lc3.selectbox("Select Month", months_o, key="tab1_off_month")
+
+    fdf = base_df.copy()
+
+    if sel_wing != "All":
+        fdf = fdf[fdf['Wing'].astype(str).str.strip() == sel_wing]
+
+    if sel_floor != "All":
+        fdf = fdf[fdf['Floor'].astype(str).str.strip() == sel_floor]
+
+    if sel_month != "All":
+        fdf = fdf[fdf['__MonthCanon'] == sel_month]
+
+    has_offer = (
+        fdf['Offer 1'].astype(str).str.strip().ne('') |
+        fdf['Offer 2'].astype(str).str.strip().ne('')
+    )
+    fdf = fdf[has_offer]
+
+    st.markdown(
+        f"<div class='chips'>"
+        f"<span class='chip'><span class='dot'></span> Wing: {sel_wing}</span>"
+        f"<span class='chip'><span class='dot'></span> Floor: {sel_floor}</span>"
+        f"<span class='chip'><span class='dot'></span> Month: {sel_month}</span>"
+        f"<span class='chip ok'><span class='dot'></span> Matches: {len(fdf)}</span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+    if fdf.empty:
+        st.warning("No Offer data available for selected criteria.")
+    else:
+        show = fdf[['Flat Number', 'Offer 1', 'Offer 2']].copy()
+        st.markdown(show.to_html(index=False, classes="styled-table"), unsafe_allow_html=True)
+    with TAB_SE_PERFORMANCE:
+        st.header("📈 Sales Performance Command Center")
+        st.caption("Unified view of calls, visits, revisits, cancellations, conversion, and sales executive performance.")
+    
+        # =========================================================
+        # Guards
+        # =========================================================
+        if not ordered_months:
+            st.info("No month data available to filter.")
+            st.stop()
+    
+        if df is None or df.empty:
+            st.info("Sales executive booking data is not available.")
+            st.stop()
+    
+        daily_visits_available = sheets_connected and daily_visits_df is not None and not daily_visits_df.empty
+    
+        # =========================================================
+        # CSS
+        # =========================================================
+        st.markdown(
+            """
+            <style>
+            .spcc-filter-shell{
+              background: rgba(255,255,255,0.96);
+              border: 1px solid rgba(49,51,63,0.12);
+              border-radius: 18px;
+              padding: 14px 16px 10px 16px;
+              box-shadow: 0 8px 22px rgba(0,0,0,0.06);
+              margin-bottom: 12px;
+            }
+            .section-shell{
+              background: rgba(255,255,255,0.96);
+              border: 1px solid rgba(49,51,63,0.10);
+              border-radius: 18px;
+              padding: 16px 16px 12px 16px;
+              box-shadow: 0 8px 22px rgba(0,0,0,0.05);
+              margin-bottom: 16px;
+            }
+            .section-banner{
+              text-align: center;
+              font-weight: 900;
+              font-size: 20px;
+              line-height: 1.2;
+              padding: 12px 14px;
+              border-radius: 16px;
+              color: #ffffff;
+              background: linear-gradient(90deg, #2563eb, #7c3aed);
+              box-shadow: 0 8px 20px rgba(37,99,235,0.18);
+              margin-bottom: 8px;
+            }
+            .section-sub{
+              text-align: center;
+              font-size: 0.92rem;
+              font-weight: 600;
+              color: rgba(49,51,63,0.72);
+              margin-bottom: 12px;
+            }
+            .metric-card{
+              background: linear-gradient(180deg, rgba(255,255,255,0.99), rgba(248,250,252,0.98));
+              border: 1px solid rgba(49,51,63,0.10);
+              border-radius: 16px;
+              padding: 14px 12px;
+              text-align: center;
+              min-height: 118px;
+              display: flex;
+              flex-direction: column;
+              justify-content: center;
+              box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+            }
+            .metric-card h3{
+              margin: 0 0 8px 0;
+              font-size: 12.5px;
+              line-height: 1.2;
+              font-weight: 800;
+              color: rgba(49,51,63,0.78);
+              text-align: center;
+            }
+            .metric-card p{
+              margin: 0;
+              font-size: 28px;
+              line-height: 1.05;
+              font-weight: 900;
+              color: #111827;
+              text-align: center;
+            }
+            .metric-card span{
+              display: block;
+              margin-top: 8px;
+              font-size: 12px;
+              line-height: 1.2;
+              font-weight: 700;
+              color: rgba(49,51,63,0.65);
+              text-align: center;
+            }
+            .chips{
+              display: flex;
+              gap: 8px;
+              flex-wrap: wrap;
+              margin: 6px 0 14px 0;
+            }
+            .chip{
+              display: inline-flex;
+              align-items: center;
+              gap: 7px;
+              background: rgba(255,255,255,0.96);
+              border: 1px solid rgba(49,51,63,0.12);
+              border-radius: 999px;
+              padding: 6px 10px;
+              font-size: 12.5px;
+              font-weight: 700;
+              color: #111827;
+            }
+            .chip.ok{
+              background: rgba(236,253,245,0.95);
+              border-color: rgba(16,185,129,0.20);
+            }
+            .dot{
+              width: 8px;
+              height: 8px;
+              border-radius: 999px;
+              background: #2563eb;
+              display: inline-block;
+            }
+            .chip.ok .dot{
+              background: #10b981;
+            }
+            div[data-testid="stDateInput"] input,
+            .stSelectbox div[data-baseweb="select"]{
+              border-radius: 12px !important;
+            }
+            button[kind="primary"]{
+              border-radius: 14px !important;
+              font-weight: 800 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+    
+        # =========================================================
+        # Helpers
+        # =========================================================
+        BOOK_COL = "Today's Booking"
+        CANC_COL = "Today's Cancellation"
+    
+        EXEC_CONFIG = [
+            {
+                "name": "Tejas P",
+                "revisits": "Tejas P Revisits",
+                "attended": "Tejas P Attended",
+                "answered": "Tejas P Calls Answered",
+                "unanswered": "Tejas P Calls Unanswered",
+            },
+            {
+                "name": "Komal K",
+                "revisits": "Komal K Revisits",
+                "attended": "Komal K Attended",
+                "answered": "Komal K Calls Answered",
+                "unanswered": "Komal K Calls Unanswered",
+            },
+            {
+                "name": "Ashutosh S",
+                "revisits": "Ashutosh S Revisits",
+                "attended": "Ashutosh S Attended",
+                "answered": "Ashutosh S Calls Answered",
+                "unanswered": "Ashutosh S Calls Unanswered",
+            },
+            {
+                "name": "Sailee D",
+                "revisits": "Sailee D Revisits",
+                "attended": "Sailee D Attended",
+                "answered": "Sailee D Calls Answered",
+                "unanswered": "Sailee D Calls Unanswered",
+            },
+        ]
+    
+        def _to_int(x):
+            try:
+                return int(float(str(x).strip() or 0))
+            except Exception:
+                return 0
+    
+        def _strip_apostrophe(s: str) -> str:
+            s = str(s or "").strip()
+            return s[1:] if s.startswith("'") else s
+    
+        def parse_date_text(s):
+            t = _strip_apostrophe(s)
+            for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    return datetime.datetime.strptime(t, fmt).date()
+                except Exception:
+                    pass
+            try:
+                ts = pd.to_datetime(t, dayfirst=True, errors="coerce")
+                if pd.isna(ts):
+                    return None
+                return ts.date()
+            except Exception:
+                return None
+    
+        def month_label_to_key(s: str) -> str:
+            raw = _strip_apostrophe(s)
+            raw = str(raw or "").replace("-", " ").replace("_", " ").strip()
+            raw = " ".join(raw.split())
+            if not raw:
+                return ""
+    
+            candidates = [raw, raw.title(), raw.upper()]
+            formats = ("%B %y", "%B %Y", "%b %y", "%b %Y", "%Y-%m", "%m/%Y")
+    
+            for cand in candidates:
+                for fmt in formats:
+                    try:
+                        return datetime.datetime.strptime(cand, fmt).strftime("%Y-%m")
+                    except Exception:
+                        pass
+    
+            try:
+                ts = pd.to_datetime(raw, dayfirst=True, errors="coerce")
+                if pd.isna(ts):
+                    return ""
+                return ts.strftime("%Y-%m")
+            except Exception:
+                return ""
+    
+        def _pct(num, den):
+            den = den if den not in (0, None) else 0
+            if den == 0:
+                return None
+            return (num / den) * 100.0
+    
+        def _fmt_pct(x):
+            return "—" if (x is None or pd.isna(x)) else f"{x:.1f}%"
+    
+        def _fmt_days(x):
+            return "—" if (x is None or pd.isna(x)) else f"{x:.1f} days"
+    
+        def line_chart_with_values(df_in, x_col, y_col, title, x_sort=None):
+            if df_in.empty:
+                st.info(f"No data for: {title}")
+                return
+            base = alt.Chart(df_in).encode(
+                x=alt.X(f"{x_col}:N", sort=x_sort, title=x_col),
+                y=alt.Y(f"{y_col}:Q", title=y_col)
+            )
+            line = base.mark_line(point=True).encode(
+                tooltip=[
+                    alt.Tooltip(f"{x_col}:N"),
+                    alt.Tooltip(f"{y_col}:Q", format=",.0f")
+                ]
+            )
+            labels = base.mark_text(dy=-10, fontSize=11, fontWeight="bold").encode(
+                text=alt.Text(f"{y_col}:Q", format=",.0f")
+            )
+            st.altair_chart(
+                (line + labels).properties(title=title, height=360),
+                use_container_width=True
+            )
+    
+        def bar_chart_with_values(df_in, x_col, y_col, title, x_sort=None, color_col=None):
+            if df_in.empty:
+                st.info(f"No data for: {title}")
+                return
+    
+            enc = {
+                "x": alt.X(f"{x_col}:N", sort=x_sort, title=x_col),
+                "y": alt.Y(f"{y_col}:Q", title=y_col),
+                "tooltip": [
+                    alt.Tooltip(f"{x_col}:N"),
+                    alt.Tooltip(f"{y_col}:Q", format=",.0f")
+                ],
+            }
+            if color_col:
+                enc["color"] = alt.Color(f"{color_col}:N", title=color_col)
+    
+            base = alt.Chart(df_in).encode(**enc)
+            bars = base.mark_bar()
+            labels = base.mark_text(dy=-7, fontSize=11, fontWeight="bold").encode(
+                text=alt.Text(f"{y_col}:Q", format=",.0f")
+            )
+            st.altair_chart(
+                (bars + labels).properties(title=title, height=360),
+                use_container_width=True
+            )
+    
+        def grouped_bar_chart_with_values(df_in, x_col, series_col, value_col, title, x_sort=None, series_sort=None):
+            if df_in.empty:
+                st.info(f"No data for: {title}")
+                return
+            base = alt.Chart(df_in).encode(
+                x=alt.X(f"{x_col}:N", sort=x_sort, title=x_col),
+                xOffset=alt.XOffset(f"{series_col}:N", sort=series_sort),
+                y=alt.Y(f"{value_col}:Q", title=value_col),
+                color=alt.Color(f"{series_col}:N", title=series_col),
+                tooltip=[
+                    alt.Tooltip(f"{x_col}:N"),
+                    alt.Tooltip(f"{series_col}:N"),
+                    alt.Tooltip(f"{value_col}:Q", format=",.0f"),
+                ],
+            )
+            bars = base.mark_bar()
+            labels = base.mark_text(dy=-6, fontSize=11, fontWeight="bold").encode(
+                text=alt.Text(f"{value_col}:Q", format=",.0f")
+            )
+            st.altair_chart(
+                (bars + labels).properties(title=title, height=390),
+                use_container_width=True
+            )
+    
+        # =========================================================
+        # Month filter
+        # =========================================================
+        fcol1, fcol2 = st.columns(2)
+        start_month = fcol1.selectbox("From Month", ordered_months, index=0, key="spcc_start_month")
+        end_month = fcol2.selectbox("To Month", ordered_months, index=len(ordered_months) - 1, key="spcc_end_month")
+    
+        try:
+            si = ordered_months.index(start_month)
+            ei = ordered_months.index(end_month)
+        except ValueError:
+            st.warning("Please select valid months.")
+            st.stop()
+    
+        if si > ei:
+            si, ei = ei, si
+            start_month, end_month = ordered_months[si], ordered_months[ei]
+    
+        selected_months = ordered_months[si:ei + 1]
+        selected_month_norms = {str(_strip_apostrophe(m)).strip().upper() for m in selected_months}
+        selected_month_keys = {month_label_to_key(m) for m in selected_months if month_label_to_key(m)}
+    
+        # =========================================================
+        # Booking dataframe
+        # =========================================================
+        df_all = df.copy()
+        df_all["Month"] = df_all.get("Month", pd.Series(index=df_all.index, dtype="object")).fillna("").astype(str)
+        df_all["_MonthNorm"] = df_all["Month"].apply(lambda x: str(_strip_apostrophe(x)).strip().upper())
+        df_all["_MonthKey"] = df_all["Month"].apply(month_label_to_key)
+    
+        df_period = df_all[
+            (df_all["_MonthNorm"].isin(selected_month_norms)) |
+            (df_all["_MonthKey"].isin(selected_month_keys))
+        ].copy()
+    
+        # =========================================================
+        # Daily visits dataframe
+        # =========================================================
+        dv_period = pd.DataFrame()
+    
+        if daily_visits_available:
+            dv = daily_visits_df.copy()
+        
+            supabase_daily_visits_cols = {
+                "visit_date": "Date",
+                "date": "Date",
+                "month": "Month",
+                "day": "Day",
+                "cp_visits": "CP Visits",
+                "direct_walk_in": "Direct Walk-in",
+                "references": "References",
+                "digital": "Digital",
+                "newspaper": "Newspaper",
+                "todays_cancellation": "Today's Cancellation",
+                "todays_booking": "Today's Booking",
+                "total_revisits": "Total Revisits",
+                "tejas_p_revisits": "Tejas P Revisits",
+                "komal_k_revisits": "Komal K Revisits",
+                "ashutosh_s_revisits": "Ashutosh S Revisits",
+                "sailee_d_revisits": "Sailee D Revisits",
+                "total_attended": "Total Attended",
+                "tejas_p_attended": "Tejas P Attended",
+                "komal_k_attended": "Komal K Attended",
+                "ashutosh_s_attended": "Ashutosh S Attended",
+                "sailee_d_attended": "Sailee D Attended",
+                "total_calls_answered": "Total Calls Answered",
+                "tejas_p_calls_answered": "Tejas P Calls Answered",
+                "komal_k_calls_answered": "Komal K Calls Answered",
+                "ashutosh_s_calls_answered": "Ashutosh S Calls Answered",
+                "sailee_d_calls_answered": "Sailee D Calls Answered",
+                "total_calls_unanswered": "Total Calls Unanswered",
+                "tejas_p_calls_unanswered": "Tejas P Calls Unanswered",
+                "komal_k_calls_unanswered": "Komal K Calls Unanswered",
+                "ashutosh_s_calls_unanswered": "Ashutosh S Calls Unanswered",
+                "sailee_d_calls_unanswered": "Sailee D Calls Unanswered",
+                "festival_1": "Festival 1",
+                "festival_2": "Festival 2",
+                "festival_3": "Festival 3",
+                "total_visits": "Total Visits",
+            }
+        
+            dv = dv.rename(columns=supabase_daily_visits_cols)
+    
+            if not dv.empty:
+                for c in ["Date", "Month", "Festival 1", "Festival 2", "Festival 3"]:
+                    if c not in dv.columns:
+                        dv[c] = ""
+    
+                required_dv_num_cols = [
+                    "CP Visits",
+                    "Direct Walk-in",
+                    "References",
+                    "Digital",
+                    "Newspaper",
+                    BOOK_COL,
+                    CANC_COL,
+                    "Total Visits",
+                    "Total Revisits",
+                    "Total Attended",
+                    "Total Calls Answered",
+                    "Total Calls Unanswered",
+                    "Revisit",
+                ]
+                for ex in EXEC_CONFIG:
+                    required_dv_num_cols.extend([
+                        ex["revisits"],
+                        ex["attended"],
+                        ex["answered"],
+                        ex["unanswered"],
+                    ])
+    
+                for c in required_dv_num_cols:
+                    if c not in dv.columns:
+                        dv[c] = 0
+    
+                for c in required_dv_num_cols:
+                    dv[c] = dv[c].apply(_to_int)
+    
+                dv["Date_obj"] = dv["Date"].apply(parse_date_text)
+                dv = dv.dropna(subset=["Date_obj"]).copy()
+    
+                if not dv.empty:
+                    exec_revisit_cols = [ex["revisits"] for ex in EXEC_CONFIG]
+                    exec_attended_cols = [ex["attended"] for ex in EXEC_CONFIG]
+                    exec_answered_cols = [ex["answered"] for ex in EXEC_CONFIG]
+                    exec_unanswered_cols = [ex["unanswered"] for ex in EXEC_CONFIG]
+    
+                    zero_mask = dv["Total Revisits"].fillna(0).astype(int) == 0
+                    if "Revisit" in dv.columns:
+                        dv.loc[zero_mask, "Total Revisits"] = dv.loc[zero_mask, "Revisit"]
+                    dv.loc[dv["Total Revisits"].fillna(0).astype(int) == 0, "Total Revisits"] = dv[exec_revisit_cols].sum(axis=1)
+                    dv["Total Revisits"] = dv["Total Revisits"].astype(int)
+    
+                    zero_mask = dv["Total Attended"].fillna(0).astype(int) == 0
+                    dv.loc[zero_mask, "Total Attended"] = dv.loc[zero_mask, exec_attended_cols].sum(axis=1)
+                    dv["Total Attended"] = dv["Total Attended"].astype(int)
+    
+                    zero_mask = dv["Total Calls Answered"].fillna(0).astype(int) == 0
+                    dv.loc[zero_mask, "Total Calls Answered"] = dv.loc[zero_mask, exec_answered_cols].sum(axis=1)
+                    dv["Total Calls Answered"] = dv["Total Calls Answered"].astype(int)
+    
+                    zero_mask = dv["Total Calls Unanswered"].fillna(0).astype(int) == 0
+                    dv.loc[zero_mask, "Total Calls Unanswered"] = dv.loc[zero_mask, exec_unanswered_cols].sum(axis=1)
+                    dv["Total Calls Unanswered"] = dv["Total Calls Unanswered"].astype(int)
+    
+                    source_cols = ["CP Visits", "Direct Walk-in", "References", "Digital", "Newspaper"]
+                    zero_mask_vis = dv["Total Visits"].fillna(0).astype(int) == 0
+                    dv.loc[zero_mask_vis, "Total Visits"] = (
+                        dv.loc[zero_mask_vis, source_cols].sum(axis=1) + dv.loc[zero_mask_vis, "Total Revisits"]
+                    )
+                    dv["Total Visits"] = dv["Total Visits"].astype(int)
+    
+                    dv["_MonthNorm"] = dv["Month"].apply(lambda x: str(_strip_apostrophe(x)).strip().upper())
+                    dv["_MonthKey"] = dv["Month"].apply(month_label_to_key)
+    
+                    missing_month_mask = dv["_MonthKey"].eq("") | dv["_MonthKey"].isna()
+                    dv.loc[missing_month_mask, "_MonthKey"] = dv.loc[missing_month_mask, "Date_obj"].apply(
+                        lambda d: d.strftime("%Y-%m")
+                    )
+                    dv.loc[dv["_MonthNorm"].eq("") | dv["_MonthNorm"].isna(), "_MonthNorm"] = dv["Date_obj"].apply(
+                        lambda d: d.strftime("%B %y").upper()
+                    )
+    
+                    dv_period = dv[
+                        (dv["_MonthNorm"].isin(selected_month_norms)) |
+                        (dv["_MonthKey"].isin(selected_month_keys))
+                    ].copy()
+    
+        # =========================================================
+        # Availability check
+        # =========================================================
+        st.markdown(
+            f"<div class='chips'>"
+            f"<span class='chip'><span class='dot'></span> From: {start_month}</span>"
+            f"<span class='chip'><span class='dot'></span> To: {end_month}</span>"
+            f"<span class='chip ok'><span class='dot'></span> Booking Records: {len(df_period)}</span>"
+            f"<span class='chip ok'><span class='dot'></span> Daily Visit Rows: {len(dv_period) if not dv_period.empty else 0}</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+    
+        if df_period.empty and dv_period.empty:
+            st.warning("No data available for the selected month range.")
+            st.stop()
+    
+        # =========================================================
+        # Normalize booking dataset
+        # =========================================================
+        if not df_period.empty:
+            if "_DerivedType" in df_period.columns:
+                type_col = df_period["_DerivedType"].astype(str).str.upper().str.strip()
+            else:
+                type_col = df_period.get("Type", pd.Series(index=df_period.index, dtype="object")).astype(str).str.upper().str.strip()
+            df_period["_DerivedType2"] = type_col
+    
+            if "Lead Type" in df_period.columns:
+                df_period["_LeadType2"] = (
+                    df_period["Lead Type"]
+                    .fillna("Unknown")
+                    .astype(str)
+                    .str.strip()
+                    .replace("", "Unknown")
+                    .str.title()
+                )
+            else:
+                df_period["_LeadType2"] = "Unknown"
+    
+            df_period["_ConvDays"] = pd.to_numeric(
+                df_period.get("Conversion Period (days)", pd.Series(index=df_period.index, dtype="float")),
+                errors="coerce"
+            )
+    
+            df_period["_MonthDisplay"] = df_period["Month"].astype(str).replace("", "Unknown")
+            booking_execs = sorted(df_period["Sales Executive"].dropna().astype(str).unique())
+        else:
+            booking_execs = []
+    
+        active_exec_count = len(booking_execs) if booking_execs else len(EXEC_CONFIG)
+    
+        # =========================================================
+        # Overall KPIs
+        # =========================================================
+        avg_conv_overall = df_period["_ConvDays"].mean() if (not df_period.empty and df_period["_ConvDays"].notna().any()) else float("nan")
+    
+        total_visits = int(dv_period["Total Visits"].sum()) if not dv_period.empty else 0
+        total_revisits = int(dv_period["Total Revisits"].sum()) if not dv_period.empty else 0
+        total_calls_answered = int(dv_period["Total Calls Answered"].sum()) if not dv_period.empty else 0
+        total_calls_unanswered = int(dv_period["Total Calls Unanswered"].sum()) if not dv_period.empty else 0
+        total_calls = total_calls_answered + total_calls_unanswered
+        total_cancellations = int(dv_period[CANC_COL].sum()) if not dv_period.empty else 0
+        call_answer_rate = _pct(total_calls_answered, total_calls)
+        revisit_rate = _pct(total_revisits, total_visits)
+    
+        st.markdown("<div class='section-shell'>", unsafe_allow_html=True)
+        st.markdown("<div class='section-banner'>📌 Overall Performance Snapshot</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-sub'>Top level summary for the selected month range.</div>", unsafe_allow_html=True)
+    
+        ov1, ov2, ov3, ov4 = st.columns(4)
+        ov1.markdown(
+            f"<div class='metric-card'><h3>Total Visits</h3><p>{total_visits:,}</p><span>Daily visits sheet</span></div>",
+            unsafe_allow_html=True
+        )
+        ov2.markdown(
+            f"<div class='metric-card'><h3>Total Calls</h3><p>{total_calls:,}</p><span>Answered + unanswered</span></div>",
+            unsafe_allow_html=True
+        )
+        ov3.markdown(
+            f"<div class='metric-card'><h3>Call Answer Rate</h3><p>{_fmt_pct(call_answer_rate)}</p><span>Answered / Total Calls</span></div>",
+            unsafe_allow_html=True
+        )
+        ov4.markdown(
+            f"<div class='metric-card'><h3>Total Revisits</h3><p>{total_revisits:,}</p><span>Across selected period</span></div>",
+            unsafe_allow_html=True
+        )
+    
+        ov5, ov6, ov7, ov8 = st.columns(4)
+        ov5.markdown(
+            f"<div class='metric-card'><h3>Revisit Rate</h3><p>{_fmt_pct(revisit_rate)}</p><span>Revisits / Total Visits</span></div>",
+            unsafe_allow_html=True
+        )
+        ov6.markdown(
+            f"<div class='metric-card'><h3>Avg Conversion Period</h3><p>{_fmt_days(avg_conv_overall)}</p><span>Booking dataset</span></div>",
+            unsafe_allow_html=True
+        )
+        ov7.markdown(
+            f"<div class='metric-card'><h3>Total Cancellations</h3><p>{total_cancellations:,}</p><span>Selected period</span></div>",
+            unsafe_allow_html=True
+        )
+        ov8.markdown(
+            f"<div class='metric-card'><h3>Active Executives</h3><p>{active_exec_count:,}</p><span>Across selected range</span></div>",
+            unsafe_allow_html=True
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+        # =========================================================
+        # Calls Dashboard
+        # =========================================================
+        st.markdown("<div class='section-shell'>", unsafe_allow_html=True)
+        st.markdown("<div class='section-banner'>📞 Calls Dashboard</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-sub'>Call volume, answered/unanswered split, and executive-wise call-to-visit performance.</div>", unsafe_allow_html=True)
+    
+        if dv_period.empty:
+            st.info("Daily visits / calls data is not available for the selected month range.")
+        else:
+            calls_exec_rows = []
+            for ex in EXEC_CONFIG:
+                ans = int(dv_period[ex["answered"]].sum()) if ex["answered"] in dv_period.columns else 0
+                unans = int(dv_period[ex["unanswered"]].sum()) if ex["unanswered"] in dv_period.columns else 0
+                total = ans + unans
+                att = int(dv_period[ex["attended"]].sum()) if ex["attended"] in dv_period.columns else 0
+                rev = int(dv_period[ex["revisits"]].sum()) if ex["revisits"] in dv_period.columns else 0
+    
+                calls_exec_rows.append({
+                    "Sales Executive": ex["name"],
+                    "Total Calls": total,
+                    "Calls Answered": ans,
+                    "Calls Unanswered": unans,
+                    "Answer Rate %": _pct(ans, total),
+                    "Attended Visits": att,
+                    "Revisits": rev,
+                    "Calls → Visits %": _pct(att, total),
+                    "Calls → Revisits %": _pct(rev, total),
+                    "Visits → Revisits %": _pct(rev, att),
+                })
+    
+            calls_exec_df = pd.DataFrame(calls_exec_rows).sort_values(
+                ["Total Calls", "Calls Answered"], ascending=[False, False]
+            ).reset_index(drop=True)
+    
+            best_answer_exec = "—"
+            best_answer_exec_sub = ""
+            answer_non_null = calls_exec_df.dropna(subset=["Answer Rate %"])
+            answer_non_null = answer_non_null[answer_non_null["Total Calls"] > 0]
+            if not answer_non_null.empty:
+                rr = answer_non_null.sort_values("Answer Rate %", ascending=False).iloc[0]
+                best_answer_exec = rr["Sales Executive"]
+                best_answer_exec_sub = _fmt_pct(rr["Answer Rate %"])
+    
+            best_visit_conv_exec = "—"
+            best_visit_conv_sub = ""
+            visit_non_null = calls_exec_df.dropna(subset=["Calls → Visits %"])
+            visit_non_null = visit_non_null[visit_non_null["Total Calls"] > 0]
+            if not visit_non_null.empty:
+                rr = visit_non_null.sort_values("Calls → Visits %", ascending=False).iloc[0]
+                best_visit_conv_exec = rr["Sales Executive"]
+                best_visit_conv_sub = _fmt_pct(rr["Calls → Visits %"])
+    
+            c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(
+                f"<div class='metric-card'><h3>Total Calls</h3><p>{total_calls:,}</p><span>All executives combined</span></div>",
+                unsafe_allow_html=True
+            )
+            c2.markdown(
+                f"<div class='metric-card'><h3>Calls Answered</h3><p>{total_calls_answered:,}</p><span>{_fmt_pct(call_answer_rate)} answer rate</span></div>",
+                unsafe_allow_html=True
+            )
+            c3.markdown(
+                f"<div class='metric-card'><h3>Calls Unanswered</h3><p>{total_calls_unanswered:,}</p><span>{_fmt_pct(_pct(total_calls_unanswered, total_calls))} of total calls</span></div>",
+                unsafe_allow_html=True
+            )
+            c4.markdown(
+                f"<div class='metric-card'><h3>Best Answer Rate</h3><p>{best_answer_exec}</p><span>{best_answer_exec_sub}</span></div>",
+                unsafe_allow_html=True
+            )
+    
+            c5, c6, c7, c8 = st.columns(4)
+            c5.markdown(
+                f"<div class='metric-card'><h3>Visit Conversion from Calls</h3><p>{_fmt_pct(_pct(int(dv_period['Total Attended'].sum()), total_calls))}</p><span>Attended / Total Calls</span></div>",
+                unsafe_allow_html=True
+            )
+            c6.markdown(
+                f"<div class='metric-card'><h3>Revisit Conversion from Calls</h3><p>{_fmt_pct(_pct(total_revisits, total_calls))}</p><span>Revisits / Total Calls</span></div>",
+                unsafe_allow_html=True
+            )
+            c7.markdown(
+                f"<div class='metric-card'><h3>Best Call→Visit</h3><p>{best_visit_conv_exec}</p><span>{best_visit_conv_sub}</span></div>",
+                unsafe_allow_html=True
+            )
+            c8.markdown(
+                f"<div class='metric-card'><h3>Avg Calls / Active SE</h3><p>{int(round(total_calls / max(len(EXEC_CONFIG), 1), 0)):,}</p><span>Across selected period</span></div>",
+                unsafe_allow_html=True
+            )
+    
+            calls_exec_display = calls_exec_df.copy()
+            for pc in ["Answer Rate %", "Calls → Visits %", "Calls → Revisits %", "Visits → Revisits %"]:
+                calls_exec_display[pc] = calls_exec_display[pc].apply(_fmt_pct)
+    
+            st.markdown("#### Executive-wise Call Performance")
+            st.dataframe(calls_exec_display, use_container_width=True, hide_index=True)
+    
+            calls_long = pd.concat(
+                [
+                    calls_exec_df[["Sales Executive", "Calls Answered"]].rename(columns={"Calls Answered": "Count"}).assign(Type="Calls Answered"),
+                    calls_exec_df[["Sales Executive", "Calls Unanswered"]].rename(columns={"Calls Unanswered": "Count"}).assign(Type="Calls Unanswered"),
+                ],
+                ignore_index=True
+            )
+    
+            calls_conv_long = pd.concat(
+                [
+                    calls_exec_df[["Sales Executive", "Total Calls"]].rename(columns={"Total Calls": "Count"}).assign(Type="Total Calls"),
+                    calls_exec_df[["Sales Executive", "Attended Visits"]].rename(columns={"Attended Visits": "Count"}).assign(Type="Attended Visits"),
+                    calls_exec_df[["Sales Executive", "Revisits"]].rename(columns={"Revisits": "Count"}).assign(Type="Revisits"),
+                ],
+                ignore_index=True
+            )
+    
+            ch1, ch2 = st.columns(2)
+            with ch1:
+                grouped_bar_chart_with_values(
+                    calls_long,
+                    x_col="Sales Executive",
+                    series_col="Type",
+                    value_col="Count",
+                    title="Answered vs Unanswered Calls",
+                    x_sort=calls_exec_df["Sales Executive"].tolist(),
+                    series_sort=["Calls Answered", "Calls Unanswered"],
+                )
+            with ch2:
+                grouped_bar_chart_with_values(
+                    calls_conv_long,
+                    x_col="Sales Executive",
+                    series_col="Type",
+                    value_col="Count",
+                    title="Calls vs Attended Visits vs Revisits",
+                    x_sort=calls_exec_df["Sales Executive"].tolist(),
+                    series_sort=["Total Calls", "Attended Visits", "Revisits"],
+                )
+    
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+        # =========================================================
+        # Daily Visits Dashboard
+        # =========================================================
+        st.markdown("<div class='section-shell'>", unsafe_allow_html=True)
+        st.markdown("<div class='section-banner'>🚶 Daily Visits Dashboard</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-sub'>Visits, revisits, sources, calls, cancellations, and weekday trends.</div>", unsafe_allow_html=True)
+    
+        if dv_period.empty:
+            st.info("Daily visits data is not available for the selected month range.")
+        else:
+            source_summary = pd.DataFrame({
+                "Source": ["CP Visits", "Direct Walk-in", "References", "Digital", "Newspaper"],
+                "Count": [
+                    int(dv_period["CP Visits"].sum()),
+                    int(dv_period["Direct Walk-in"].sum()),
+                    int(dv_period["References"].sum()),
+                    int(dv_period["Digital"].sum()),
+                    int(dv_period["Newspaper"].sum()),
+                ]
+            }).sort_values("Count", ascending=False).reset_index(drop=True)
+    
+            top_source = "—"
+            top_source_sub = ""
+            if not source_summary.empty and int(source_summary["Count"].max()) > 0:
+                sr = source_summary.iloc[0]
+                top_source = sr["Source"]
+                top_source_sub = f"{int(sr['Count']):,} visits"
+    
+            avg_visits_per_day = (dv_period["Total Visits"].mean() if len(dv_period) > 0 else float("nan"))
+    
+            d1, d2, d3, d4 = st.columns(4)
+            d1.markdown(
+                f"<div class='metric-card'><h3>Total Visits</h3><p>{total_visits:,}</p><span>All visit sources + revisits</span></div>",
+                unsafe_allow_html=True
+            )
+            d2.markdown(
+                f"<div class='metric-card'><h3>Total Revisits</h3><p>{total_revisits:,}</p><span>{_fmt_pct(revisit_rate)} of total visits</span></div>",
+                unsafe_allow_html=True
+            )
+            d3.markdown(
+                f"<div class='metric-card'><h3>Total Cancellations</h3><p>{total_cancellations:,}</p><span>Selected period</span></div>",
+                unsafe_allow_html=True
+            )
+            d4.markdown(
+                f"<div class='metric-card'><h3>Top Source</h3><p>{top_source}</p><span>{top_source_sub}</span></div>",
+                unsafe_allow_html=True
+            )
+    
+            d5, d6, d7, d8 = st.columns(4)
+            d5.markdown(
+                f"<div class='metric-card'><h3>Total Attended</h3><p>{int(dv_period['Total Attended'].sum()):,}</p><span>Executive attended visits</span></div>",
+                unsafe_allow_html=True
+            )
+            d6.markdown(
+                f"<div class='metric-card'><h3>Calls Answered</h3><p>{total_calls_answered:,}</p><span>Selected period</span></div>",
+                unsafe_allow_html=True
+            )
+            d7.markdown(
+                f"<div class='metric-card'><h3>Calls Unanswered</h3><p>{total_calls_unanswered:,}</p><span>Selected period</span></div>",
+                unsafe_allow_html=True
+            )
+            d8.markdown(
+                f"<div class='metric-card'><h3>Avg Visits / Day</h3><p>{0 if pd.isna(avg_visits_per_day) else int(round(avg_visits_per_day, 0)):,}</p><span>Average daily throughput</span></div>",
+                unsafe_allow_html=True
+            )
+    
+            day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            dv_period["DayName"] = dv_period["Date_obj"].apply(lambda d: d.strftime("%A"))
+            dv_period["DayName"] = pd.Categorical(dv_period["DayName"], categories=day_order, ordered=True)
+    
+            daily_trend = (
+                dv_period.groupby("Date_obj", as_index=False)
+                .agg({
+                    BOOK_COL: "sum",
+                    CANC_COL: "sum",
+                    "Total Calls Answered": "sum",
+                    "Total Calls Unanswered": "sum",
+                })
+                .sort_values("Date_obj")
+            )
+            daily_trend["DateLabel"] = daily_trend["Date_obj"].apply(lambda d: d.strftime("%d %b"))
+            daily_trend["Total Calls"] = daily_trend["Total Calls Answered"] + daily_trend["Total Calls Unanswered"]
+    
+            weekday_summary = (
+                dv_period.groupby("DayName", as_index=False)
+                .agg({
+                    "Total Visits": "sum",
+                    BOOK_COL: "sum",
+                    CANC_COL: "sum",
+                    "Total Revisits": "sum",
+                })
+                .rename(columns={
+                    "Total Visits": "Visits",
+                    BOOK_COL: "Bookings",
+                    CANC_COL: "Cancellations",
+                    "Total Revisits": "Revisits",
+                })
+                .sort_values("DayName")
+            )
+    
+            exec_visits_rows = []
+            for ex in EXEC_CONFIG:
+                exec_visits_rows.append({
+                    "Sales Executive": ex["name"],
+                    "Attended Visits": int(dv_period[ex["attended"]].sum()),
+                    "Revisits": int(dv_period[ex["revisits"]].sum()),
+                })
+            exec_visits_df = pd.DataFrame(exec_visits_rows)
+            exec_visits_long = pd.concat(
+                [
+                    exec_visits_df[["Sales Executive", "Attended Visits"]].rename(columns={"Attended Visits": "Count"}).assign(Type="Attended Visits"),
+                    exec_visits_df[["Sales Executive", "Revisits"]].rename(columns={"Revisits": "Count"}).assign(Type="Revisits"),
+                ],
+                ignore_index=True
+            )
+    
+            vch1, vch2 = st.columns(2)
+            with vch1:
+                line_chart_with_values(daily_trend, "DateLabel", BOOK_COL, "Daily Booking Trend")
+            with vch2:
+                line_chart_with_values(daily_trend, "DateLabel", "Total Calls", "Daily Total Calls Trend")
+    
+            vch3, vch4 = st.columns(2)
+            with vch3:
+                bar_chart_with_values(source_summary, "Source", "Count", "Lead Source Mix")
+            with vch4:
+                grouped_bar_chart_with_values(
+                    exec_visits_long,
+                    x_col="Sales Executive",
+                    series_col="Type",
+                    value_col="Count",
+                    title="Executive-wise Attended Visits vs Revisits",
+                    x_sort=exec_visits_df["Sales Executive"].tolist(),
+                    series_sort=["Attended Visits", "Revisits"],
+                )
+    
+            vch5, vch6 = st.columns(2)
+            with vch5:
+                grouped_bar_chart_with_values(
+                    weekday_summary.melt(
+                        id_vars=["DayName"],
+                        value_vars=["Visits", "Bookings", "Cancellations"],
+                        var_name="Type",
+                        value_name="Count"
+                    ),
+                    x_col="DayName",
+                    series_col="Type",
+                    value_col="Count",
+                    title="Weekday-wise Visits, Bookings, Cancellations",
+                    x_sort=day_order,
+                    series_sort=["Visits", "Bookings", "Cancellations"],
+                )
+            with vch6:
+                line_chart_with_values(weekday_summary, "DayName", "Revisits", "Weekday-wise Revisits", x_sort=day_order)
+    
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+        # =========================================================
+        # Sales Executive Conversion Dashboard
+        # =========================================================
+        st.markdown("<div class='section-shell'>", unsafe_allow_html=True)
+        st.markdown("<div class='section-banner'>💼 Sales Executive Conversion Dashboard</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-sub'>Executive-wise conversion speed, lead mix, unit mix, and supporting performance table.</div>", unsafe_allow_html=True)
+    
+        if df_period.empty:
+            st.info("Booking / conversion data is not available for the selected month range.")
+        else:
+            se_rows = []
+            executives = sorted(df_period["Sales Executive"].dropna().astype(str).unique())
+    
+            for se in executives:
+                sub = df_period[df_period["Sales Executive"].astype(str) == se].copy()
+    
+                bookings = len(sub)
+                avg_conv = sub["_ConvDays"].mean() if sub["_ConvDays"].notna().any() else float("nan")
+                psf_val = avg_psf(sub) if bookings > 0 else float("nan")
+    
+                tseries = sub["_DerivedType2"]
+                sold_1 = int((tseries == "1BHK").sum())
+                sold_2 = int((tseries == "2BHK").sum())
+    
+                lead_counts = (
+                    sub["_LeadType2"]
+                    .value_counts()
+                    .reset_index()
+                )
+                if lead_counts.empty:
+                    top_lead = "—"
+                else:
+                    top_lead = str(lead_counts.iloc[0, 0])
+    
+                se_rows.append({
+                    "Sales Executive": se,
+                    "Bookings": bookings,
+                    "Avg Conversion Days": avg_conv,
+                    "Overall PSF": psf_val,
+                    "1 BHK Sold": sold_1,
+                    "2 BHK Sold": sold_2,
+                    "Top Lead Type": top_lead,
+                })
+    
+            se_summary_df = pd.DataFrame(se_rows).sort_values("Bookings", ascending=False).reset_index(drop=True)
+    
+            total_1bhk = int((df_period["_DerivedType2"] == "1BHK").sum())
+            total_2bhk = int((df_period["_DerivedType2"] == "2BHK").sum())
+    
+            best_exec_by_conv = "—"
+            best_exec_by_conv_sub = ""
+            conv_rank = se_summary_df.dropna(subset=["Avg Conversion Days"])
+            conv_rank = conv_rank[conv_rank["Bookings"] > 0]
+            if not conv_rank.empty:
+                rr = conv_rank.sort_values("Avg Conversion Days", ascending=True).iloc[0]
+                best_exec_by_conv = rr["Sales Executive"]
+                best_exec_by_conv_sub = _fmt_days(rr["Avg Conversion Days"])
+    
+            lead_type_summary = (
+                df_period.groupby("_LeadType2", as_index=False)
+                .size()
+                .rename(columns={"size": "Bookings"})
+                .sort_values("Bookings", ascending=False)
+            )
+            dominant_lead_type = "—"
+            dominant_lead_sub = ""
+            if not lead_type_summary.empty and int(lead_type_summary["Bookings"].max()) > 0:
+                lr = lead_type_summary.iloc[0]
+                dominant_lead_type = str(lr["_LeadType2"])
+                dominant_lead_sub = f"{int(lr['Bookings']):,} records"
+    
+            best_1bhk_exec = "—"
+            best_1bhk_sub = ""
+            best_1bhk_df = se_summary_df.sort_values("1 BHK Sold", ascending=False)
+            if not best_1bhk_df.empty and int(best_1bhk_df.iloc[0]["1 BHK Sold"]) > 0:
+                rr = best_1bhk_df.iloc[0]
+                best_1bhk_exec = rr["Sales Executive"]
+                best_1bhk_sub = f"{int(rr['1 BHK Sold']):,} sold"
+    
+            best_2bhk_exec = "—"
+            best_2bhk_sub = ""
+            best_2bhk_df = se_summary_df.sort_values("2 BHK Sold", ascending=False)
+            if not best_2bhk_df.empty and int(best_2bhk_df.iloc[0]["2 BHK Sold"]) > 0:
+                rr = best_2bhk_df.iloc[0]
+                best_2bhk_exec = rr["Sales Executive"]
+                best_2bhk_sub = f"{int(rr['2 BHK Sold']):,} sold"
+    
+            b1, b2, b3, b4 = st.columns(4)
+            b1.markdown(
+                f"<div class='metric-card'><h3>Avg Conversion Period</h3><p>{_fmt_days(avg_conv_overall)}</p><span>Lower is better</span></div>",
+                unsafe_allow_html=True
+            )
+            b2.markdown(
+                f"<div class='metric-card'><h3>Fastest Conversion Executive</h3><p>{best_exec_by_conv}</p><span>{best_exec_by_conv_sub}</span></div>",
+                unsafe_allow_html=True
+            )
+            b3.markdown(
+                f"<div class='metric-card'><h3>1 BHK Sold</h3><p>{total_1bhk:,}</p><span>{_fmt_pct(_pct(total_1bhk, total_1bhk + total_2bhk))} of unit mix</span></div>",
+                unsafe_allow_html=True
+            )
+            b4.markdown(
+                f"<div class='metric-card'><h3>2 BHK Sold</h3><p>{total_2bhk:,}</p><span>{_fmt_pct(_pct(total_2bhk, total_1bhk + total_2bhk))} of unit mix</span></div>",
+                unsafe_allow_html=True
+            )
+    
+            b5, b6, b7, b8 = st.columns(4)
+            b5.markdown(
+                f"<div class='metric-card'><h3>Active Executives</h3><p>{len(executives):,}</p><span>In selected range</span></div>",
+                unsafe_allow_html=True
+            )
+            b6.markdown(
+                f"<div class='metric-card'><h3>Dominant Lead Type</h3><p>{dominant_lead_type}</p><span>{dominant_lead_sub}</span></div>",
+                unsafe_allow_html=True
+            )
+            b7.markdown(
+                f"<div class='metric-card'><h3>Best 1 BHK Seller</h3><p>{best_1bhk_exec}</p><span>{best_1bhk_sub}</span></div>",
+                unsafe_allow_html=True
+            )
+            b8.markdown(
+                f"<div class='metric-card'><h3>Best 2 BHK Seller</h3><p>{best_2bhk_exec}</p><span>{best_2bhk_sub}</span></div>",
+                unsafe_allow_html=True
+            )
+    
+            se_display = se_summary_df.copy()
+            se_display["Avg Conversion Days"] = se_display["Avg Conversion Days"].apply(_fmt_days)
+            se_display["Overall PSF"] = se_display["Overall PSF"].apply(fmt_psf)
+    
+            st.markdown("#### Executive-wise Conversion Summary")
+            st.dataframe(se_display, use_container_width=True, hide_index=True)
+    
+            lead_type_summary = lead_type_summary.rename(columns={"_LeadType2": "Lead Type"})
+    
+            month_booking_summary = (
+                df_period.groupby("_MonthDisplay", as_index=False)
+                .size()
+                .rename(columns={"size": "Bookings"})
+            )
+            month_booking_summary["_Sort"] = month_booking_summary["_MonthDisplay"].apply(
+                lambda x: ordered_months.index(x) if x in ordered_months else 9999
+            )
+            month_booking_summary = month_booking_summary.sort_values("_Sort").drop(columns=["_Sort"])
+    
+            bhk_long = pd.concat(
+                [
+                    se_summary_df[["Sales Executive", "1 BHK Sold"]].rename(columns={"1 BHK Sold": "Count"}).assign(Type="1 BHK"),
+                    se_summary_df[["Sales Executive", "2 BHK Sold"]].rename(columns={"2 BHK Sold": "Count"}).assign(Type="2 BHK"),
+                ],
+                ignore_index=True
+            )
+    
+            chb1, chb2 = st.columns(2)
+            with chb1:
+                bar_chart_with_values(
+                    se_summary_df.sort_values("Avg Conversion Days", ascending=True),
+                    "Sales Executive",
+                    "Avg Conversion Days",
+                    "Executive-wise Avg Conversion Days",
+                    x_sort=se_summary_df.sort_values("Avg Conversion Days", ascending=True)["Sales Executive"].tolist(),
+                )
+            with chb2:
+                bar_chart_with_values(
+                    lead_type_summary,
+                    "Lead Type",
+                    "Bookings",
+                    "Lead Type-wise Records",
+                    x_sort=lead_type_summary["Lead Type"].tolist(),
+                )
+    
+            chb3, chb4 = st.columns(2)
+            with chb3:
+                grouped_bar_chart_with_values(
+                    bhk_long,
+                    x_col="Sales Executive",
+                    series_col="Type",
+                    value_col="Count",
+                    title="1 BHK vs 2 BHK Sold by Executive",
+                    x_sort=se_summary_df["Sales Executive"].tolist(),
+                    series_sort=["1 BHK", "2 BHK"],
+                )
+            with chb4:
+                line_chart_with_values(
+                    month_booking_summary.rename(columns={"_MonthDisplay": "Month"}),
+                    "Month",
+                    "Bookings",
+                    "Booking Trend Across Selected Months",
+                    x_sort=month_booking_summary["_MonthDisplay"].tolist(),
+                )
+    
+            with st.expander("Open detailed executive cards"):
+                for _, row in se_summary_df.iterrows():
+                    st.markdown(f"### {row['Sales Executive']}")
+                    st.caption(f"Bookings: {int(row['Bookings']):,} | Overall PSF: {fmt_psf(row['Overall PSF'])}")
+    
+                    dc1, dc2, dc3, dc4 = st.columns(4)
+                    dc1.markdown(
+                        f"<div class='metric-card'><h3>Avg Conversion</h3><p>{_fmt_days(row['Avg Conversion Days'])}</p><span>Average conversion days</span></div>",
+                        unsafe_allow_html=True
+                    )
+                    dc2.markdown(
+                        f"<div class='metric-card'><h3>Top Lead Type</h3><p>{row['Top Lead Type']}</p><span>Most frequent source</span></div>",
+                        unsafe_allow_html=True
+                    )
+                    dc3.markdown(
+                        f"<div class='metric-card'><h3>1 BHK Sold</h3><p>{int(row['1 BHK Sold']):,}</p><span>{_fmt_pct(_pct(int(row['1 BHK Sold']), int(row['Bookings'])))}</span></div>",
+                        unsafe_allow_html=True
+                    )
+                    dc4.markdown(
+                        f"<div class='metric-card'><h3>2 BHK Sold</h3><p>{int(row['2 BHK Sold']):,}</p><span>{_fmt_pct(_pct(int(row['2 BHK Sold']), int(row['Bookings'])))}</span></div>",
+                        unsafe_allow_html=True
+                    )
+                    st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+    
+        st.markdown("</div>", unsafe_allow_html=True)
+    
