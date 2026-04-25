@@ -6194,180 +6194,180 @@ with tab1:
                 use_container_width=True
             )
     with TAB_OFFERS_DASH:
-    st.header("📈 Offers Dashboard")
-
-    base_df = df.copy()
-
-    required_off_cols = [
-        'Offer 1', 'Offer 2', 'Offer 1 Rewarded', 'Offer 2 Rewarded',
-        'month', 'Wing', 'Floor', 'Flat Number'
-    ]
-
-    for col in required_off_cols:
-        if col not in base_df.columns:
-            base_df[col] = ""
-
-    def _norm(x):
-        if pd.isna(x):
-            return ""
-        return str(x).strip()
-
-    tall_rows = []
-    for _, r in base_df.iterrows():
-        o1 = _norm(r.get('Offer 1'))
-        o2 = _norm(r.get('Offer 2'))
-        o1r = _norm(r.get('Offer 1 Rewarded')).lower()
-        o2r = _norm(r.get('Offer 2 Rewarded')).lower()
-
-        if o1:
-            tall_rows.append({"offer": o1, "rewarded": o1r in ["rewarded 1", "true", "yes", "1"]})
-        if o2:
-            tall_rows.append({"offer": o2, "rewarded": o2r in ["rewarded 2", "true", "yes", "1"]})
-
-    tall = pd.DataFrame(tall_rows) if tall_rows else pd.DataFrame(columns=["offer", "rewarded"])
-
-    OFFERS_LIST = [
-        "1 Gram Gold Coin",
-        "2 Gram Gold Coin",
-        "200 Gram Silver",
-        "Kitchen Trolley",
-        "25000 Electronic Voucher"
-    ]
-
-    def stats_for(name: str):
-        if tall.empty:
-            return 0, 0, 0
-        sub = tall[tall['offer'].astype(str).str.strip().str.casefold() == name.strip().casefold()]
-        tot = int(len(sub))
-        rwd = int(sub['rewarded'].sum())
-        pend = max(tot - rwd, 0)
-        return tot, rwd, pend
-
-    REF_LEAD_COL = "Lead Type"
-    REF_GIVEN_COL = "Referral Given"
-    AGREEMENT_COL = "Agreement Done"
-
-    for col in [REF_LEAD_COL, REF_GIVEN_COL, AGREEMENT_COL]:
-        if col not in base_df.columns:
-            base_df[col] = ""
-
-    ref_total_done = 0
-    ref_pending = 0
-    ref_rewarded = 0
-
-    df_ref = base_df.copy()
-
-    lead_norm = df_ref[REF_LEAD_COL].astype(str).str.strip().str.casefold()
-    is_referral = lead_norm.str.contains("ref", na=False)
-    df_ref = df_ref[is_referral]
-
-    agr_done_mask = df_ref[AGREEMENT_COL].astype(str).str.lower().str.strip() == 'done'
-    df_ref_done = df_ref[agr_done_mask].copy()
-
-    ref_total_done = int(len(df_ref_done))
-
-    given_norm = df_ref_done[REF_GIVEN_COL].astype(str).str.strip().str.casefold()
-    given_referrals = int(given_norm.str.contains("given|true|yes|1", regex=True, na=False).sum())
-    ref_pending = max(ref_total_done - given_referrals, 0)
-    ref_rewarded = max(ref_total_done - ref_pending, 0)
-
-    total_offers_count = int(len(tall)) + int(ref_total_done)
-
-    st.markdown(
-        f"<div class='metric-card'><h3>Total Offers Given</h3><p>{total_offers_count}</p></div>",
-        unsafe_allow_html=True
-    )
-
-    r7c1, r7c2, r7c3 = st.columns(3)
-    with r7c1:
-        st.markdown(
-            f"<div class='metric-card'><h3>Total Referrals</h3><p>{ref_total_done}</p></div>",
-            unsafe_allow_html=True
-        )
-    with r7c2:
-        st.markdown(
-            f"<div class='metric-card'><h3>Pending Referrals</h3><p>{ref_pending}</p></div>",
-            unsafe_allow_html=True
-        )
-    with r7c3:
-        st.markdown(
-            f"<div class='metric-card'><h3>Rewarded Referrals</h3><p>{ref_rewarded}</p></div>",
-            unsafe_allow_html=True
-        )
-
-    def render_offer_row(offer_name: str):
-        t, r, p = stats_for(offer_name)
-        c1, c2, c3 = st.columns(3)
-        c1.markdown(f"<div class='metric-card'><h3>{offer_name} — Total</h3><p>{t}</p></div>", unsafe_allow_html=True)
-        c2.markdown(f"<div class='metric-card'><h3>{offer_name} — Pending</h3><p>{p}</p></div>", unsafe_allow_html=True)
-        c3.markdown(f"<div class='metric-card'><h3>{offer_name} — Rewarded</h3><p>{r}</p></div>", unsafe_allow_html=True)
-
-    for offer_nm in OFFERS_LIST:
-        render_offer_row(offer_nm)
-
-    st.markdown("<div class='section-subtitle'>🎁 Offers Lookup</div>", unsafe_allow_html=True)
-
-    def canon_month2(s: str) -> str:
-        return str(s).strip().replace(" ", "").replace("-", "").upper() if pd.notna(s) else ""
-
-    base_df['__MonthCanon'] = base_df['month'].map(canon_month2)
-
-    months_o = ['All'] + sorted([m for m in base_df['__MonthCanon'].dropna().unique() if str(m).strip()], key=str)
-
-    wings_o = ['All'] + sorted(
-        [
-            str(x).strip()
-            for x in base_df['Wing'].dropna().unique()
-            if str(x).strip() != "" and str(x).strip().upper() != "NAN"
+        st.header("📈 Offers Dashboard")
+    
+        base_df = df.copy()
+    
+        required_off_cols = [
+            'Offer 1', 'Offer 2', 'Offer 1 Rewarded', 'Offer 2 Rewarded',
+            'month', 'Wing', 'Floor', 'Flat Number'
         ]
-    )
-
-    floors_o = ['All'] + sorted(
-        [
-            str(x).strip()
-            for x in base_df['Floor'].dropna().unique()
-            if str(x).strip() != "" and str(x).strip().upper() != "NAN"
-        ],
-        key=lambda x: str(x)
-    )
-
-    lc1, lc2, lc3 = st.columns(3)
-    sel_wing = lc1.selectbox("Select Wing", wings_o, key="tab1_off_wing")
-    sel_floor = lc2.selectbox("Select Floor", floors_o, key="tab1_off_floor")
-    sel_month = lc3.selectbox("Select Month", months_o, key="tab1_off_month")
-
-    fdf = base_df.copy()
-
-    if sel_wing != "All":
-        fdf = fdf[fdf['Wing'].astype(str).str.strip() == sel_wing]
-
-    if sel_floor != "All":
-        fdf = fdf[fdf['Floor'].astype(str).str.strip() == sel_floor]
-
-    if sel_month != "All":
-        fdf = fdf[fdf['__MonthCanon'] == sel_month]
-
-    has_offer = (
-        fdf['Offer 1'].astype(str).str.strip().ne('') |
-        fdf['Offer 2'].astype(str).str.strip().ne('')
-    )
-    fdf = fdf[has_offer]
-
-    st.markdown(
-        f"<div class='chips'>"
-        f"<span class='chip'><span class='dot'></span> Wing: {sel_wing}</span>"
-        f"<span class='chip'><span class='dot'></span> Floor: {sel_floor}</span>"
-        f"<span class='chip'><span class='dot'></span> Month: {sel_month}</span>"
-        f"<span class='chip ok'><span class='dot'></span> Matches: {len(fdf)}</span>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
-
-    if fdf.empty:
-        st.warning("No Offer data available for selected criteria.")
-    else:
-        show = fdf[['Flat Number', 'Offer 1', 'Offer 2']].copy()
-        st.markdown(show.to_html(index=False, classes="styled-table"), unsafe_allow_html=True)
+    
+        for col in required_off_cols:
+            if col not in base_df.columns:
+                base_df[col] = ""
+    
+        def _norm(x):
+            if pd.isna(x):
+                return ""
+            return str(x).strip()
+    
+        tall_rows = []
+        for _, r in base_df.iterrows():
+            o1 = _norm(r.get('Offer 1'))
+            o2 = _norm(r.get('Offer 2'))
+            o1r = _norm(r.get('Offer 1 Rewarded')).lower()
+            o2r = _norm(r.get('Offer 2 Rewarded')).lower()
+    
+            if o1:
+                tall_rows.append({"offer": o1, "rewarded": o1r in ["rewarded 1", "true", "yes", "1"]})
+            if o2:
+                tall_rows.append({"offer": o2, "rewarded": o2r in ["rewarded 2", "true", "yes", "1"]})
+    
+        tall = pd.DataFrame(tall_rows) if tall_rows else pd.DataFrame(columns=["offer", "rewarded"])
+    
+        OFFERS_LIST = [
+            "1 Gram Gold Coin",
+            "2 Gram Gold Coin",
+            "200 Gram Silver",
+            "Kitchen Trolley",
+            "25000 Electronic Voucher"
+        ]
+    
+        def stats_for(name: str):
+            if tall.empty:
+                return 0, 0, 0
+            sub = tall[tall['offer'].astype(str).str.strip().str.casefold() == name.strip().casefold()]
+            tot = int(len(sub))
+            rwd = int(sub['rewarded'].sum())
+            pend = max(tot - rwd, 0)
+            return tot, rwd, pend
+    
+        REF_LEAD_COL = "Lead Type"
+        REF_GIVEN_COL = "Referral Given"
+        AGREEMENT_COL = "Agreement Done"
+    
+        for col in [REF_LEAD_COL, REF_GIVEN_COL, AGREEMENT_COL]:
+            if col not in base_df.columns:
+                base_df[col] = ""
+    
+        ref_total_done = 0
+        ref_pending = 0
+        ref_rewarded = 0
+    
+        df_ref = base_df.copy()
+    
+        lead_norm = df_ref[REF_LEAD_COL].astype(str).str.strip().str.casefold()
+        is_referral = lead_norm.str.contains("ref", na=False)
+        df_ref = df_ref[is_referral]
+    
+        agr_done_mask = df_ref[AGREEMENT_COL].astype(str).str.lower().str.strip() == 'done'
+        df_ref_done = df_ref[agr_done_mask].copy()
+    
+        ref_total_done = int(len(df_ref_done))
+    
+        given_norm = df_ref_done[REF_GIVEN_COL].astype(str).str.strip().str.casefold()
+        given_referrals = int(given_norm.str.contains("given|true|yes|1", regex=True, na=False).sum())
+        ref_pending = max(ref_total_done - given_referrals, 0)
+        ref_rewarded = max(ref_total_done - ref_pending, 0)
+    
+        total_offers_count = int(len(tall)) + int(ref_total_done)
+    
+        st.markdown(
+            f"<div class='metric-card'><h3>Total Offers Given</h3><p>{total_offers_count}</p></div>",
+            unsafe_allow_html=True
+        )
+    
+        r7c1, r7c2, r7c3 = st.columns(3)
+        with r7c1:
+            st.markdown(
+                f"<div class='metric-card'><h3>Total Referrals</h3><p>{ref_total_done}</p></div>",
+                unsafe_allow_html=True
+            )
+        with r7c2:
+            st.markdown(
+                f"<div class='metric-card'><h3>Pending Referrals</h3><p>{ref_pending}</p></div>",
+                unsafe_allow_html=True
+            )
+        with r7c3:
+            st.markdown(
+                f"<div class='metric-card'><h3>Rewarded Referrals</h3><p>{ref_rewarded}</p></div>",
+                unsafe_allow_html=True
+            )
+    
+        def render_offer_row(offer_name: str):
+            t, r, p = stats_for(offer_name)
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"<div class='metric-card'><h3>{offer_name} — Total</h3><p>{t}</p></div>", unsafe_allow_html=True)
+            c2.markdown(f"<div class='metric-card'><h3>{offer_name} — Pending</h3><p>{p}</p></div>", unsafe_allow_html=True)
+            c3.markdown(f"<div class='metric-card'><h3>{offer_name} — Rewarded</h3><p>{r}</p></div>", unsafe_allow_html=True)
+    
+        for offer_nm in OFFERS_LIST:
+            render_offer_row(offer_nm)
+    
+        st.markdown("<div class='section-subtitle'>🎁 Offers Lookup</div>", unsafe_allow_html=True)
+    
+        def canon_month2(s: str) -> str:
+            return str(s).strip().replace(" ", "").replace("-", "").upper() if pd.notna(s) else ""
+    
+        base_df['__MonthCanon'] = base_df['month'].map(canon_month2)
+    
+        months_o = ['All'] + sorted([m for m in base_df['__MonthCanon'].dropna().unique() if str(m).strip()], key=str)
+    
+        wings_o = ['All'] + sorted(
+            [
+                str(x).strip()
+                for x in base_df['Wing'].dropna().unique()
+                if str(x).strip() != "" and str(x).strip().upper() != "NAN"
+            ]
+        )
+    
+        floors_o = ['All'] + sorted(
+            [
+                str(x).strip()
+                for x in base_df['Floor'].dropna().unique()
+                if str(x).strip() != "" and str(x).strip().upper() != "NAN"
+            ],
+            key=lambda x: str(x)
+        )
+    
+        lc1, lc2, lc3 = st.columns(3)
+        sel_wing = lc1.selectbox("Select Wing", wings_o, key="tab1_off_wing")
+        sel_floor = lc2.selectbox("Select Floor", floors_o, key="tab1_off_floor")
+        sel_month = lc3.selectbox("Select Month", months_o, key="tab1_off_month")
+    
+        fdf = base_df.copy()
+    
+        if sel_wing != "All":
+            fdf = fdf[fdf['Wing'].astype(str).str.strip() == sel_wing]
+    
+        if sel_floor != "All":
+            fdf = fdf[fdf['Floor'].astype(str).str.strip() == sel_floor]
+    
+        if sel_month != "All":
+            fdf = fdf[fdf['__MonthCanon'] == sel_month]
+    
+        has_offer = (
+            fdf['Offer 1'].astype(str).str.strip().ne('') |
+            fdf['Offer 2'].astype(str).str.strip().ne('')
+        )
+        fdf = fdf[has_offer]
+    
+        st.markdown(
+            f"<div class='chips'>"
+            f"<span class='chip'><span class='dot'></span> Wing: {sel_wing}</span>"
+            f"<span class='chip'><span class='dot'></span> Floor: {sel_floor}</span>"
+            f"<span class='chip'><span class='dot'></span> Month: {sel_month}</span>"
+            f"<span class='chip ok'><span class='dot'></span> Matches: {len(fdf)}</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+    
+        if fdf.empty:
+            st.warning("No Offer data available for selected criteria.")
+        else:
+            show = fdf[['Flat Number', 'Offer 1', 'Offer 2']].copy()
+            st.markdown(show.to_html(index=False, classes="styled-table"), unsafe_allow_html=True)
     with TAB_SE_PERFORMANCE:
         st.header("📈 Sales Performance Command Center")
         st.caption("Unified view of calls, visits, revisits, cancellations, conversion, and sales executive performance.")
