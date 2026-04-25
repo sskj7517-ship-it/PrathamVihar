@@ -12858,8 +12858,7 @@ with tab2:
                             """,
                             unsafe_allow_html=True
                         )
-
-   with ST_INCENTIVE_STATUS:
+    with ST_INCENTIVE_STATUS:
         st.header("📊 Incentive Status")
     
         import re
