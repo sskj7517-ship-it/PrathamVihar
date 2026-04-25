@@ -6705,7 +6705,10 @@ with tab1:
         # Booking dataframe
         # =========================================================
         df_all = df.copy()
-        df_all["Month"] = df_all.get("Month", pd.Series(index=df_all.index, dtype="object")).fillna("").astype(str)
+        if "Month" not in df_all.columns:
+            df_all["Month"] = ""
+        
+        df_all["Month"] = df_all["Month"].astype("object").where(pd.notna(df_all["Month"]), "").astype(str)
         df_all["_MonthNorm"] = df_all["Month"].apply(lambda x: str(_strip_apostrophe(x)).strip().upper())
         df_all["_MonthKey"] = df_all["Month"].apply(month_label_to_key)
     
