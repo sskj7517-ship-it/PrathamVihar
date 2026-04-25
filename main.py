@@ -317,7 +317,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # Create tabs - same sequence as old app
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
     "**Dashboard**",
     "**Calculators**",
     "**Booking Punch**",
@@ -330,7 +330,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13
     "**Pratham Vihar AI**",
     "**Daily Visits**",
     "**Inventory Status**",
-    "**CashFlow**"
+    "**CashFlow**",
+    "**Site Summary**"
 ])
 
 # --- Custom Quarter Function ---
@@ -24235,3 +24236,1336 @@ with tab13:
                 })
 
                 st.dataframe(wing_due_df, use_container_width=True, height=460)
+
+
+with tab14:
+    import re
+    import io
+    import ssl
+    import smtplib
+    import datetime
+    from email.mime.text import MIMEText
+    from email.mime.image import MIMEImage
+    from email.mime.multipart import MIMEMultipart
+    from email.utils import formatdate, make_msgid
+
+    import pandas as pd
+    import altair as alt
+    import streamlit as st
+
+    st.header("🏢 Complete Site Summary")
+    st.caption("Complete connected summary from bookings, daily visits, marketing, CP payout, and cashflow slab master tables.")
+
+    # ============================================================
+    # SUPABASE CONNECTION
+    # ============================================================
+    supabase_client = globals().get("supabase", None) or globals().get("supabase_client", None)
+
+    if supabase_client is None:
+        st.error("Supabase client is not initialized. Please check your Supabase connection block.")
+        st.stop()
+
+    # ============================================================
+    # TABLE NAMES
+    # ============================================================
+    BOOKINGS_TABLE = "bookings"
+    DAILY_VISITS_TABLE = "daily_visits"
+    MARKETING_TABLE = "marketing_expenditure"
+    CP_PAYOUT_TABLE = "cp_payout_tracker"
+    CASHFLOW_MASTER_TABLE = "cashflow_slab_master"
+
+    # ============================================================
+    # BASIC HELPERS
+    # ============================================================
+    def _safe_str(x):
+        if x is None or pd.isna(x):
+            return ""
+        s = str(x).strip()
+        if s.endswith(".0"):
+            s = s[:-2]
+        return s
+
+    def _norm_col(x):
+        return re.sub(r"[^a-z0-9]+", "", str(x or "").lower())
+
+    def _col(df: pd.DataFrame, *names):
+        if df is None or df.empty:
+            return None
+        cmap = {_norm_col(c): c for c in df.columns}
+        for name in names:
+            key = _norm_col(name)
+            if key in cmap:
+                return cmap[key]
+        return None
+
+    def _to_num(x):
+        try:
+            if x is None or pd.isna(x):
+                return 0.0
+            s = str(x).replace("₹", "").replace("Rs.", "").replace("Rs", "").replace(",", "").strip()
+            if s == "":
+                return 0.0
+            return float(s)
+        except Exception:
+            return 0.0
+
+    def _num_series(df, col):
+        if df is None or df.empty or not col or col not in df.columns:
+            return pd.Series(dtype=float)
+        return pd.to_numeric(
+            df[col].astype(str).str.replace("₹", "", regex=False).str.replace(",", "", regex=False),
+            errors="coerce"
+        ).fillna(0.0)
+
+    def _fmt_money(x):
+        return f"₹ {_to_num(x):,.0f}"
+
+    def _fmt_pct(x):
+        try:
+            if x is None or pd.isna(x):
+                return "—"
+            return f"{float(x):.1f}%"
+        except Exception:
+            return "—"
+
+    def _pct(num, den):
+        den = _to_num(den)
+        num = _to_num(num)
+        if den <= 0:
+            return 0.0
+        return (num / den) * 100.0
+
+    def _is_agreement_done(v):
+        s = _safe_str(v).lower()
+        return s in {"done", "completed", "complete", "yes"} or "done" in s or "complete" in s
+
+    def _is_stamp_received(v):
+        # Your rule: blank = pending. Any meaningful remark/value = received.
+        s = _safe_str(v).lower()
+        if s in {"", "pending", "not received", "not recieved", "no", "n", "na", "n/a", "none"}:
+            return False
+        return True
+
+    def _is_truthy(v):
+        s = _safe_str(v).lower()
+        return s in {"true", "yes", "1", "given", "done", "paid", "received", "completed"}
+
+    def _norm_wing(v):
+        s = _safe_str(v).upper().replace("-", " ").replace("_", " ")
+        s = " ".join(s.split())
+        wing_map = {
+            "B": "B Wing", "B WING": "B Wing",
+            "C": "C Wing", "C WING": "C Wing",
+            "E": "E Wing", "E WING": "E Wing",
+            "F": "F Wing", "F WING": "F Wing",
+        }
+        return wing_map.get(s, _safe_str(v))
+
+    def _norm_flat(v):
+        return _safe_str(v).upper()
+
+    def _month_from_any(date_val=None, month_val=None):
+        raw_date = _safe_str(date_val).replace("'", "")
+        raw_month = _safe_str(month_val).replace("'", "")
+
+        for raw in [raw_date, raw_month]:
+            if not raw:
+                continue
+
+            for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%B %y", "%B %Y", "%b %y", "%b %Y", "%Y-%m", "%m/%Y"):
+                try:
+                    dt = datetime.datetime.strptime(raw.title(), fmt)
+                    return dt.strftime("%Y-%m"), dt.strftime("%b %y")
+                except Exception:
+                    pass
+
+            try:
+                dt = pd.to_datetime(raw, dayfirst=True, errors="coerce")
+                if pd.notna(dt):
+                    return dt.strftime("%Y-%m"), dt.strftime("%b %y")
+            except Exception:
+                pass
+
+        return "9999-99", "Unknown"
+
+    # ============================================================
+    # SUPABASE READ HELPERS
+    # ============================================================
+    @st.cache_data(ttl=180, show_spinner=False)
+    def _sb_select_all(table_name: str, order_col: str = "id") -> list[dict]:
+        rows = []
+        page_size = 1000
+        start = 0
+
+        while True:
+            query = supabase_client.table(table_name).select("*")
+
+            if order_col:
+                try:
+                    query = query.order(order_col)
+                except Exception:
+                    pass
+
+            res = query.range(start, start + page_size - 1).execute()
+            batch = getattr(res, "data", None) or []
+            rows.extend(batch)
+
+            if len(batch) < page_size:
+                break
+
+            start += page_size
+
+        return rows
+
+    def _load_table(table_name: str) -> pd.DataFrame:
+        try:
+            rows = _sb_select_all(table_name)
+            return pd.DataFrame(rows)
+        except Exception as e:
+            st.warning(f"Could not load `{table_name}`: {e}")
+            return pd.DataFrame()
+
+    if st.button("🔄 Refresh Summary Data", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    bookings_df = _load_table(BOOKINGS_TABLE)
+    daily_df = _load_table(DAILY_VISITS_TABLE)
+    marketing_df = _load_table(MARKETING_TABLE)
+    cp_df = _load_table(CP_PAYOUT_TABLE)
+    master_df = _load_table(CASHFLOW_MASTER_TABLE)
+
+    # ============================================================
+    # BOOKING SUMMARY
+    # ============================================================
+    b_customer_col = _col(bookings_df, "customer_name", "Customer Name")
+    b_wing_col = _col(bookings_df, "wing", "Wing")
+    b_flat_col = _col(bookings_df, "flat_number", "Flat Number")
+    b_floor_col = _col(bookings_df, "floor", "Floor")
+    b_type_col = _col(bookings_df, "type", "unit_type", "Type")
+    b_final_price_col = _col(bookings_df, "final_price", "Final Price")
+    b_rate_col = _col(bookings_df, "rate", "Rate")
+    b_agreement_cost_col = _col(bookings_df, "agreement_cost", "Agreement Cost")
+    b_sales_exec_col = _col(bookings_df, "sales_executive", "Sales Executive")
+    b_lead_col = _col(bookings_df, "lead_type", "Lead Type")
+    b_month_col = _col(bookings_df, "month", "Month")
+    b_date_col = _col(bookings_df, "date", "booking_date", "Date")
+    b_stamp_col = _col(bookings_df, "stamp_duty", "Stamp Duty")
+    b_agreement_done_col = _col(bookings_df, "agreement_done", "Agreement Done")
+    b_received_col = _col(bookings_df, "received_amount", "Received Amount")
+    b_stamp_pct_col = _col(bookings_df, "stamp_duty_percent", "Stamp Duty %")
+    b_carpet_col = _col(bookings_df, "carpet_area", "Carpet Area")
+
+    if not bookings_df.empty:
+        bookings_work = bookings_df.copy()
+
+        if b_wing_col:
+            bookings_work["_WingNorm"] = bookings_work[b_wing_col].apply(_norm_wing)
+        else:
+            bookings_work["_WingNorm"] = ""
+
+        if b_flat_col:
+            bookings_work["_FlatNorm"] = bookings_work[b_flat_col].apply(_norm_flat)
+        else:
+            bookings_work["_FlatNorm"] = ""
+
+        if b_sales_exec_col:
+            bookings_work["_SalesExecutive"] = bookings_work[b_sales_exec_col].fillna("").astype(str).str.strip()
+        else:
+            bookings_work["_SalesExecutive"] = "Unknown"
+
+        if b_month_col or b_date_col:
+            month_pairs = bookings_work.apply(
+                lambda r: _month_from_any(
+                    r.get(b_date_col, "") if b_date_col else "",
+                    r.get(b_month_col, "") if b_month_col else ""
+                ),
+                axis=1
+            )
+            bookings_work["_MonthSort"] = [x[0] for x in month_pairs]
+            bookings_work["_MonthLabel"] = [x[1] for x in month_pairs]
+        else:
+            bookings_work["_MonthSort"] = "9999-99"
+            bookings_work["_MonthLabel"] = "Unknown"
+
+        if b_agreement_done_col:
+            bookings_work["_AgreementDone"] = bookings_work[b_agreement_done_col].apply(_is_agreement_done)
+        else:
+            bookings_work["_AgreementDone"] = False
+
+        if b_stamp_col:
+            bookings_work["_StampReceived"] = bookings_work[b_stamp_col].apply(_is_stamp_received)
+        else:
+            bookings_work["_StampReceived"] = False
+
+        bookings_work["_AgreementCostNum"] = _num_series(bookings_work, b_agreement_cost_col) if b_agreement_cost_col else 0.0
+        bookings_work["_FinalPriceNum"] = _num_series(bookings_work, b_final_price_col) if b_final_price_col else 0.0
+        bookings_work["_ReceivedAmountNum"] = _num_series(bookings_work, b_received_col) if b_received_col else 0.0
+        bookings_work["_StampPctNum"] = _num_series(bookings_work, b_stamp_pct_col) if b_stamp_pct_col else 7.0
+        bookings_work.loc[bookings_work["_StampPctNum"] <= 0, "_StampPctNum"] = 7.0
+        bookings_work["_StampDutyAmountEst"] = bookings_work["_AgreementCostNum"] * bookings_work["_StampPctNum"] / 100.0
+
+        if b_carpet_col:
+            bookings_work["_CarpetNum"] = _num_series(bookings_work, b_carpet_col)
+        else:
+            bookings_work["_CarpetNum"] = 0.0
+    else:
+        bookings_work = pd.DataFrame()
+
+    total_bookings = int(len(bookings_work))
+    total_agreement_done = int(bookings_work["_AgreementDone"].sum()) if not bookings_work.empty else 0
+    total_agreement_pending = max(total_bookings - total_agreement_done, 0)
+
+    total_stamp_received = int(bookings_work["_StampReceived"].sum()) if not bookings_work.empty else 0
+    total_stamp_pending = max(total_bookings - total_stamp_received, 0)
+
+    total_agreement_value = float(bookings_work["_AgreementCostNum"].sum()) if not bookings_work.empty else 0.0
+    total_final_price = float(bookings_work["_FinalPriceNum"].sum()) if not bookings_work.empty else 0.0
+    total_stamp_duty_amount_est = float(bookings_work["_StampDutyAmountEst"].sum()) if not bookings_work.empty else 0.0
+    total_received_booking = float(bookings_work["_ReceivedAmountNum"].sum()) if not bookings_work.empty else 0.0
+    total_carpet_area = float(bookings_work["_CarpetNum"].sum()) if not bookings_work.empty else 0.0
+
+    # ============================================================
+    # DAILY VISITS SUMMARY
+    # ============================================================
+    dv_total_visits_col = _col(daily_df, "total_visits", "Total Visits")
+    dv_total_revisits_col = _col(daily_df, "total_revisits", "Total Revisits", "Revisit")
+    dv_total_attended_col = _col(daily_df, "total_attended", "Total Attended")
+    dv_calls_ans_col = _col(daily_df, "total_calls_answered", "Total Calls Answered")
+    dv_calls_unans_col = _col(daily_df, "total_calls_unanswered", "Total Calls Unanswered")
+    dv_booking_col = _col(daily_df, "todays_booking", "Today's Booking")
+    dv_cancel_col = _col(daily_df, "todays_cancellation", "Today's Cancellation")
+    dv_month_col = _col(daily_df, "month", "Month")
+    dv_date_col = _col(daily_df, "visit_date", "Date", "date")
+
+    source_cols = [
+        _col(daily_df, "cp_visits", "CP Visits"),
+        _col(daily_df, "direct_walk_in", "Direct Walk-in"),
+        _col(daily_df, "references_count", "References"),
+        _col(daily_df, "digital", "Digital"),
+        _col(daily_df, "newspaper", "Newspaper"),
+    ]
+    source_cols = [c for c in source_cols if c]
+
+    def _sum_col(df, col):
+        if df is None or df.empty or not col:
+            return 0.0
+        return float(_num_series(df, col).sum())
+
+    total_revisits = _sum_col(daily_df, dv_total_revisits_col)
+    total_attended = _sum_col(daily_df, dv_total_attended_col)
+    total_calls_answered = _sum_col(daily_df, dv_calls_ans_col)
+    total_calls_unanswered = _sum_col(daily_df, dv_calls_unans_col)
+
+    if daily_df.empty:
+        total_visits = 0.0
+    elif dv_total_visits_col:
+        total_visits = _sum_col(daily_df, dv_total_visits_col)
+    else:
+        total_visits = sum(_sum_col(daily_df, c) for c in source_cols) + total_revisits
+
+    total_calls = total_calls_answered + total_calls_unanswered
+    total_daily_bookings = _sum_col(daily_df, dv_booking_col)
+    total_cancellations = _sum_col(daily_df, dv_cancel_col)
+
+    call_answer_rate = _pct(total_calls_answered, total_calls)
+    visit_to_booking_pct = _pct(total_bookings, total_visits)
+    calls_to_visits_pct = _pct(total_attended, total_calls)
+
+    # ============================================================
+    # MARKETING SUMMARY
+    # ============================================================
+    m_amount_col = _col(marketing_df, "amount", "Amount")
+    m_purpose_col = _col(marketing_df, "purpose", "Purpose")
+    m_vendor_col = _col(marketing_df, "vendor", "Vendor")
+    m_month_col = _col(marketing_df, "month", "Month")
+    m_date_col = _col(marketing_df, "expense_date", "Date", "date")
+
+    if not marketing_df.empty:
+        marketing_work = marketing_df.copy()
+        marketing_work["_AmountNum"] = _num_series(marketing_work, m_amount_col) if m_amount_col else 0.0
+        month_pairs = marketing_work.apply(
+            lambda r: _month_from_any(
+                r.get(m_date_col, "") if m_date_col else "",
+                r.get(m_month_col, "") if m_month_col else ""
+            ),
+            axis=1
+        )
+        marketing_work["_MonthSort"] = [x[0] for x in month_pairs]
+        marketing_work["_MonthLabel"] = [x[1] for x in month_pairs]
+    else:
+        marketing_work = pd.DataFrame()
+
+    total_marketing_spend = float(marketing_work["_AmountNum"].sum()) if not marketing_work.empty else 0.0
+    marketing_spend_pct_agreement = _pct(total_marketing_spend, total_agreement_value)
+    marketing_cost_per_booking = total_marketing_spend / total_bookings if total_bookings else 0.0
+    marketing_spend_per_sqft = (total_marketing_spend / total_carpet_area * 1.38) if total_carpet_area else 0.0
+
+    # ============================================================
+    # CP PAYOUT SUMMARY
+    # ============================================================
+    cp_fos_col = _col(cp_df, "fos_amount", "FOS (₹)")
+    cp_bro_col = _col(cp_df, "brokerage_amount", "Brokerage (₹)")
+    cp_fos_given_col = _col(cp_df, "fos_given", "FOS Given")
+    cp_bro_given_col = _col(cp_df, "brokerage_given", "Brokerage Given")
+
+    if not cp_df.empty:
+        cp_work = cp_df.copy()
+        cp_work["_FOSAmount"] = _num_series(cp_work, cp_fos_col) if cp_fos_col else 0.0
+        cp_work["_BrokerageAmount"] = _num_series(cp_work, cp_bro_col) if cp_bro_col else 0.0
+        cp_work["_FOSGiven"] = cp_work[cp_fos_given_col].apply(_is_truthy) if cp_fos_given_col else False
+        cp_work["_BrokerageGiven"] = cp_work[cp_bro_given_col].apply(_is_truthy) if cp_bro_given_col else False
+    else:
+        cp_work = pd.DataFrame()
+
+    total_fos_amount = float(cp_work["_FOSAmount"].sum()) if not cp_work.empty else 0.0
+    total_brokerage_amount = float(cp_work["_BrokerageAmount"].sum()) if not cp_work.empty else 0.0
+    total_cp_payout = total_fos_amount + total_brokerage_amount
+
+    # ============================================================
+    # CASHFLOW / WING-WISE COLLECTION SUMMARY
+    # ============================================================
+    REGISTRATION_AMOUNT = 30000.0
+
+    CONSTRUCTION_SLABS = [
+        "PLINTH",
+        "3RD FLOOR",
+        "7TH FLOOR",
+        "10TH FLOOR",
+        "13TH FLOOR",
+        "FLOORING",
+        "PLASTERING",
+        "PLUMBING",
+        "ELECTRICAL",
+        "SANITARY & LIFT",
+        "POSSESSION",
+    ]
+
+    ALL_SLABS = [
+        "BOOKING AMOUNT",
+        "AGREEMENT",
+        "PLINTH",
+        "3RD FLOOR",
+        "7TH FLOOR",
+        "10TH FLOOR",
+        "13TH FLOOR",
+        "FLOORING",
+        "PLASTERING",
+        "PLUMBING",
+        "ELECTRICAL",
+        "SANITARY & LIFT",
+        "POSSESSION",
+    ]
+
+    cm_wing_col = _col(master_df, "wing", "Wing")
+    cm_slab_col = _col(master_df, "slab_name", "Slab Name")
+    cm_completed_col = _col(master_df, "completed", "Completed")
+
+    if not master_df.empty:
+        master_work = master_df.copy()
+        master_work["_WingNorm"] = master_work[cm_wing_col].apply(_norm_wing) if cm_wing_col else ""
+        master_work["_SlabNorm"] = master_work[cm_slab_col].fillna("").astype(str).str.strip().str.upper() if cm_slab_col else ""
+        master_work["_Completed"] = master_work[cm_completed_col].fillna("").astype(str).str.strip().str.lower().eq("completed") if cm_completed_col else False
+    else:
+        master_work = pd.DataFrame()
+
+    def _gst_rate(agreement_cost):
+        return 0.05 if _to_num(agreement_cost) > 4499999 else 0.01
+
+    def _gross_agreement_value(agreement_cost):
+        agr = _to_num(agreement_cost)
+        gst_amt = round(agr * _gst_rate(agr), 2)
+        return round(agr + gst_amt, 2), gst_amt
+
+    def _head_amounts(agreement_cost):
+        gross_value, gst_amt = _gross_agreement_value(agreement_cost)
+        return {
+            "BOOKING AMOUNT": round(gross_value * 5.0 / 100.0, 2),
+            "AGREEMENT": round(gross_value * 10.0 / 100.0, 2),
+            "PLINTH": round(gross_value * 15.0 / 100.0, 2),
+            "3RD FLOOR": round(gross_value * 7.5 / 100.0, 2),
+            "7TH FLOOR": round(gross_value * 7.5 / 100.0, 2),
+            "10TH FLOOR": round(gross_value * 7.5 / 100.0, 2),
+            "13TH FLOOR": round(gross_value * 7.5 / 100.0, 2),
+            "FLOORING": round(gross_value * 7.5 / 100.0, 2),
+            "PLASTERING": round(gross_value * 7.5 / 100.0, 2),
+            "PLUMBING": round(gross_value * 7.5 / 100.0, 2),
+            "ELECTRICAL": round(gross_value * 7.5 / 100.0, 2),
+            "SANITARY & LIFT": round(gross_value * 5.0 / 100.0, 2),
+            "POSSESSION": round(gross_value * 5.0 / 100.0, 2),
+            "_GST_TOTAL": gst_amt,
+            "_GROSS_VALUE": gross_value,
+        }
+
+    def _highest_completed_slab(wing):
+        if master_work.empty:
+            return None
+
+        sub = master_work[
+            master_work["_WingNorm"].astype(str).str.strip().str.upper() ==
+            _norm_wing(wing).upper()
+        ].copy()
+
+        completed_set = set(sub.loc[sub["_Completed"], "_SlabNorm"].tolist())
+
+        highest = None
+        for slab in CONSTRUCTION_SLABS:
+            if slab.upper() in completed_set:
+                highest = slab
+
+        return highest
+
+    def _due_order_for_booking(row):
+        order = ["BOOKING AMOUNT"]
+
+        if bool(row.get("_AgreementDone", False)):
+            order.append("AGREEMENT")
+
+            highest = _highest_completed_slab(row.get("_WingNorm", ""))
+            if highest is not None:
+                upto = CONSTRUCTION_SLABS.index(highest)
+                order.extend(CONSTRUCTION_SLABS[:upto + 1])
+
+        return order
+
+    def _customer_collection_summary(row):
+        amt_map = _head_amounts(row.get("_AgreementCostNum", 0))
+        due_order = _due_order_for_booking(row)
+        collection_till = sum(_to_num(amt_map.get(h, 0)) for h in due_order)
+        received_till = _to_num(row.get("_ReceivedAmountNum", 0))
+        due_till = max(collection_till - received_till, 0.0)
+
+        return {
+            "Collection Till Date": collection_till,
+            "Received Till Date": received_till,
+            "Due Till Date": due_till,
+            "Received %": _pct(received_till, collection_till),
+            "Due %": _pct(due_till, collection_till),
+            "Stage": _highest_completed_slab(row.get("_WingNorm", "")) or "Booking / Agreement Stage",
+        }
+
+    if not bookings_work.empty:
+        wing_rows = []
+        for wing, sub in bookings_work.groupby("_WingNorm"):
+            if not wing:
+                continue
+
+            collection = 0.0
+            received = 0.0
+
+            for _, r in sub.iterrows():
+                sm = _customer_collection_summary(r)
+                collection += sm["Collection Till Date"]
+                received += sm["Received Till Date"]
+
+            due = max(collection - received, 0.0)
+
+            wing_rows.append({
+                "Wing": wing,
+                "Bookings": int(len(sub)),
+                "Collection Till Date": collection,
+                "Received Till Date": received,
+                "Due Till Date": due,
+                "Received %": _pct(received, collection),
+                "Due %": _pct(due, collection),
+                "Current Stage": _highest_completed_slab(wing) or "Booking / Agreement Stage",
+            })
+
+        wing_summary_df = pd.DataFrame(wing_rows).sort_values("Wing").reset_index(drop=True)
+    else:
+        wing_summary_df = pd.DataFrame(columns=[
+            "Wing", "Bookings", "Collection Till Date", "Received Till Date", "Due Till Date",
+            "Received %", "Due %", "Current Stage"
+        ])
+
+    total_collection = float(wing_summary_df["Collection Till Date"].sum()) if not wing_summary_df.empty else 0.0
+    total_cashflow_received = float(wing_summary_df["Received Till Date"].sum()) if not wing_summary_df.empty else 0.0
+    total_cashflow_due = float(wing_summary_df["Due Till Date"].sum()) if not wing_summary_df.empty else 0.0
+    total_cashflow_due_pct = _pct(total_cashflow_due, total_collection)
+
+    # ============================================================
+    # MONTHWISE + SALES EXECUTIVE PENDING TABLE
+    # ============================================================
+    if not bookings_work.empty:
+        pending_df = bookings_work.copy()
+        pending_df["_Stamp Duty Pending Count"] = (~pending_df["_StampReceived"]).astype(int)
+        pending_df["_Agreement Pending Count"] = (~pending_df["_AgreementDone"]).astype(int)
+
+        month_exec_pending_df = (
+            pending_df
+            .groupby(["_MonthSort", "_MonthLabel", "_SalesExecutive"], as_index=False)
+            .agg({
+                "_Stamp Duty Pending Count": "sum",
+                "_Agreement Pending Count": "sum",
+            })
+            .rename(columns={
+                "_MonthLabel": "Month",
+                "_SalesExecutive": "Sales Executive",
+                "_Stamp Duty Pending Count": "Stamp Duty Pending Count",
+                "_Agreement Pending Count": "Agreement Not Done Pending Count",
+            })
+            .sort_values(["_MonthSort", "Sales Executive"])
+            .drop(columns=["_MonthSort"])
+            .reset_index(drop=True)
+        )
+
+        month_exec_pending_df["Total Pending"] = (
+            month_exec_pending_df["Stamp Duty Pending Count"] +
+            month_exec_pending_df["Agreement Not Done Pending Count"]
+        )
+    else:
+        month_exec_pending_df = pd.DataFrame(columns=[
+            "Month", "Sales Executive", "Stamp Duty Pending Count",
+            "Agreement Not Done Pending Count", "Total Pending"
+        ])
+
+    # ============================================================
+    # SALES EXECUTIVE VISITS / CALLS / CONVERSION SUMMARY
+    # ============================================================
+    EXEC_CONFIG = [
+        {
+            "name": "Tejas P",
+            "attended_cols": ["tejas_p_attended", "Tejas P Attended"],
+            "revisit_cols": ["tejas_p_revisits", "Tejas P Revisits"],
+            "answered_cols": ["tejas_p_calls_answered", "Tejas P Calls Answered"],
+            "unanswered_cols": ["tejas_p_calls_unanswered", "Tejas P Calls Unanswered"],
+        },
+        {
+            "name": "Komal K",
+            "attended_cols": ["komal_k_attended", "Komal K Attended"],
+            "revisit_cols": ["komal_k_revisits", "Komal K Revisits"],
+            "answered_cols": ["komal_k_calls_answered", "Komal K Calls Answered"],
+            "unanswered_cols": ["komal_k_calls_unanswered", "Komal K Calls Unanswered"],
+        },
+        {
+            "name": "Ashutosh S",
+            "attended_cols": ["ashutosh_s_attended", "Ashutosh S Attended"],
+            "revisit_cols": ["ashutosh_s_revisits", "Ashutosh S Revisits"],
+            "answered_cols": ["ashutosh_s_calls_answered", "Ashutosh S Calls Answered"],
+            "unanswered_cols": ["ashutosh_s_calls_unanswered", "Ashutosh S Calls Unanswered"],
+        },
+        {
+            "name": "Sailee D",
+            "attended_cols": ["sailee_d_attended", "Sailee D Attended"],
+            "revisit_cols": ["sailee_d_revisits", "Sailee D Revisits"],
+            "answered_cols": ["sailee_d_calls_answered", "Sailee D Calls Answered"],
+            "unanswered_cols": ["sailee_d_calls_unanswered", "Sailee D Calls Unanswered"],
+        },
+    ]
+
+    def _sum_first_existing(df, names):
+        for name in names:
+            c = _col(df, name)
+            if c:
+                return float(_num_series(df, c).sum())
+        return 0.0
+
+    exec_rows = []
+    for ex in EXEC_CONFIG:
+        attended = _sum_first_existing(daily_df, ex["attended_cols"])
+        revisits = _sum_first_existing(daily_df, ex["revisit_cols"])
+        answered = _sum_first_existing(daily_df, ex["answered_cols"])
+        unanswered = _sum_first_existing(daily_df, ex["unanswered_cols"])
+        calls = answered + unanswered
+
+        if not bookings_work.empty:
+            bookings_count = int(
+                bookings_work["_SalesExecutive"]
+                .astype(str)
+                .str.strip()
+                .str.casefold()
+                .eq(ex["name"].casefold())
+                .sum()
+            )
+        else:
+            bookings_count = 0
+
+        exec_rows.append({
+            "Sales Executive": ex["name"],
+            "Bookings": bookings_count,
+            "Attended Visits": int(attended),
+            "Revisits": int(revisits),
+            "Total Calls": int(calls),
+            "Calls Answered": int(answered),
+            "Calls Unanswered": int(unanswered),
+            "Call Answer %": _pct(answered, calls),
+            "Calls → Visits %": _pct(attended, calls),
+            "Visits → Bookings %": _pct(bookings_count, attended),
+            "Calls → Bookings %": _pct(bookings_count, calls),
+        })
+
+    exec_summary_df = pd.DataFrame(exec_rows).sort_values(["Bookings", "Attended Visits"], ascending=False).reset_index(drop=True)
+
+    # ============================================================
+    # MONTHLY DATA FOR GRAPHS
+    # ============================================================
+    if not bookings_work.empty:
+        monthly_bookings_df = (
+            bookings_work
+            .groupby(["_MonthSort", "_MonthLabel"], as_index=False)
+            .size()
+            .rename(columns={"_MonthLabel": "Month", "size": "Bookings"})
+            .sort_values("_MonthSort")
+        )
+        month_sort_order = monthly_bookings_df["Month"].tolist()
+    else:
+        monthly_bookings_df = pd.DataFrame(columns=["_MonthSort", "Month", "Bookings"])
+        month_sort_order = []
+
+    if not marketing_work.empty:
+        monthly_marketing_df = (
+            marketing_work
+            .groupby(["_MonthSort", "_MonthLabel"], as_index=False)["_AmountNum"]
+            .sum()
+            .rename(columns={"_MonthLabel": "Month", "_AmountNum": "Marketing Spend"})
+            .sort_values("_MonthSort")
+        )
+    else:
+        monthly_marketing_df = pd.DataFrame(columns=["_MonthSort", "Month", "Marketing Spend"])
+
+    if not daily_df.empty:
+        dv_work = daily_df.copy()
+        month_pairs = dv_work.apply(
+            lambda r: _month_from_any(
+                r.get(dv_date_col, "") if dv_date_col else "",
+                r.get(dv_month_col, "") if dv_month_col else ""
+            ),
+            axis=1
+        )
+        dv_work["_MonthSort"] = [x[0] for x in month_pairs]
+        dv_work["_MonthLabel"] = [x[1] for x in month_pairs]
+
+        dv_work["_TotalVisits"] = _num_series(dv_work, dv_total_visits_col) if dv_total_visits_col else 0.0
+        dv_work["_CallsAnswered"] = _num_series(dv_work, dv_calls_ans_col) if dv_calls_ans_col else 0.0
+        dv_work["_CallsUnanswered"] = _num_series(dv_work, dv_calls_unans_col) if dv_calls_unans_col else 0.0
+        dv_work["_TotalCalls"] = dv_work["_CallsAnswered"] + dv_work["_CallsUnanswered"]
+
+        monthly_visit_call_df = (
+            dv_work
+            .groupby(["_MonthSort", "_MonthLabel"], as_index=False)
+            .agg({
+                "_TotalVisits": "sum",
+                "_TotalCalls": "sum",
+            })
+            .rename(columns={
+                "_MonthLabel": "Month",
+                "_TotalVisits": "Total Visits",
+                "_TotalCalls": "Total Calls",
+            })
+            .sort_values("_MonthSort")
+        )
+    else:
+        monthly_visit_call_df = pd.DataFrame(columns=["_MonthSort", "Month", "Total Visits", "Total Calls"])
+
+    # ============================================================
+    # REQUIRED HEADER DIAGNOSTICS
+    # ============================================================
+    required_headers_rows = [
+        {"Table": BOOKINGS_TABLE, "Needful Headers": "customer_name, wing, flat_number, agreement_cost, sales_executive, month, agreement_done, stamp_duty, received_amount, stamp_duty_percent"},
+        {"Table": DAILY_VISITS_TABLE, "Needful Headers": "visit_date, month, cp_visits, direct_walk_in, references_count, digital, newspaper, todays_booking, todays_cancellation, total_visits, total_attended, total_calls_answered, total_calls_unanswered, executive-wise attended/revisits/calls columns"},
+        {"Table": MARKETING_TABLE, "Needful Headers": "amount, purpose, expense_date, month, vendor, remark"},
+        {"Table": CP_PAYOUT_TABLE, "Needful Headers": "fos_amount, brokerage_amount, fos_given, brokerage_given"},
+        {"Table": CASHFLOW_MASTER_TABLE, "Needful Headers": "wing, slab_name, completed, completed_on"},
+    ]
+
+    # ============================================================
+    # CSS
+    # ============================================================
+    st.markdown(
+        """
+        <style>
+        .ss-section-title{
+            font-size: 1.2rem;
+            font-weight: 900;
+            color: #0f172a;
+            margin: 22px 0 10px 0;
+        }
+        .ss-kpi{
+            background: linear-gradient(180deg, rgba(255,255,255,0.99), rgba(248,250,252,0.98));
+            border: 1px solid rgba(49,51,63,0.10);
+            border-radius: 16px;
+            padding: 14px 12px;
+            text-align: center;
+            min-height: 118px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+            margin-bottom: 10px;
+        }
+        .ss-kpi h3{
+            margin: 0 0 8px 0;
+            font-size: 12.5px;
+            line-height: 1.2;
+            font-weight: 800;
+            color: rgba(49,51,63,0.78);
+            text-align: center;
+        }
+        .ss-kpi p{
+            margin: 0;
+            font-size: 27px;
+            line-height: 1.05;
+            font-weight: 900;
+            color: #111827;
+            text-align: center;
+        }
+        .ss-kpi span{
+            display: block;
+            margin-top: 8px;
+            font-size: 12px;
+            line-height: 1.2;
+            font-weight: 700;
+            color: rgba(49,51,63,0.65);
+            text-align: center;
+        }
+        .ss-blue{background:#eff6ff;}
+        .ss-green{background:#ecfdf5;}
+        .ss-amber{background:#fff7ed;}
+        .ss-rose{background:#fff1f2;}
+        .ss-gray{background:#f8fafc;}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    def kpi_card(title, value, sub="", tone="ss-gray"):
+        st.markdown(
+            f"""
+            <div class="ss-kpi {tone}">
+                <h3>{title}</h3>
+                <p>{value}</p>
+                <span>{sub}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # ============================================================
+    # KPI SECTION 1 — SALES / AGREEMENT / STAMP DUTY
+    # ============================================================
+    st.markdown("<div class='ss-section-title'>📌 Booking, Agreement & Stamp Duty Summary</div>", unsafe_allow_html=True)
+
+    r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+    with r1c1:
+        kpi_card("Total Bookings", f"{total_bookings:,}", "Bookings table", "ss-blue")
+    with r1c2:
+        kpi_card("Agreement Done", f"{total_agreement_done:,}", f"Pending: {total_agreement_pending:,}", "ss-green")
+    with r1c3:
+        kpi_card("Stamp Duty Received", f"{total_stamp_received:,}", f"Pending: {total_stamp_pending:,}", "ss-green")
+    with r1c4:
+        kpi_card("Estimated Stamp Duty", _fmt_money(total_stamp_duty_amount_est), "Based on Agreement Cost × Stamp %", "ss-amber")
+
+    r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+    with r2c1:
+        kpi_card("Agreement Value", _fmt_money(total_agreement_value), "Total agreement cost", "ss-blue")
+    with r2c2:
+        kpi_card("Final Price Value", _fmt_money(total_final_price), "Total final package/deal value", "ss-gray")
+    with r2c3:
+        kpi_card("Booking Received Amount", _fmt_money(total_received_booking), "Received amount in bookings", "ss-green")
+    with r2c4:
+        kpi_card("Visit → Booking Conversion", _fmt_pct(visit_to_booking_pct), "Bookings / Total Visits", "ss-amber")
+
+    # ============================================================
+    # KPI SECTION 2 — MARKETING / EXPENDITURE / VISITS / CALLS
+    # ============================================================
+    st.markdown("<div class='ss-section-title'>📈 Marketing, Visits & Calls Summary</div>", unsafe_allow_html=True)
+
+    r3c1, r3c2, r3c3, r3c4 = st.columns(4)
+    with r3c1:
+        kpi_card("Total Marketing Spend", _fmt_money(total_marketing_spend), f"{_fmt_pct(marketing_spend_pct_agreement)} of Agreement Value", "ss-rose")
+    with r3c2:
+        kpi_card("Marketing Cost / Booking", _fmt_money(marketing_cost_per_booking), "Marketing spend / bookings", "ss-amber")
+    with r3c3:
+        kpi_card("Marketing Spend / Sqft", _fmt_money(marketing_spend_per_sqft), "Spend / Carpet Area × 1.38", "ss-gray")
+    with r3c4:
+        kpi_card("CP Payout Total", _fmt_money(total_cp_payout), f"FOS: {_fmt_money(total_fos_amount)} | Brokerage: {_fmt_money(total_brokerage_amount)}", "ss-blue")
+
+    r4c1, r4c2, r4c3, r4c4 = st.columns(4)
+    with r4c1:
+        kpi_card("Total Visits", f"{int(total_visits):,}", "Daily visits table", "ss-blue")
+    with r4c2:
+        kpi_card("Total Calls", f"{int(total_calls):,}", f"Answered: {int(total_calls_answered):,}", "ss-gray")
+    with r4c3:
+        kpi_card("Call Answer Rate", _fmt_pct(call_answer_rate), "Answered / total calls", "ss-green")
+    with r4c4:
+        kpi_card("Calls → Visits", _fmt_pct(calls_to_visits_pct), "Attended visits / total calls", "ss-amber")
+
+    # ============================================================
+    # KPI SECTION 3 — CASHFLOW
+    # ============================================================
+    st.markdown("<div class='ss-section-title'>💰 Wing-wise Collection & Due Summary</div>", unsafe_allow_html=True)
+
+    cfc1, cfc2, cfc3 = st.columns(3)
+    with cfc1:
+        kpi_card("Total Collection Till Date", _fmt_money(total_collection), "Based on completed slab master", "ss-blue")
+    with cfc2:
+        kpi_card("Total Received Till Date", _fmt_money(total_cashflow_received), "Received amount from bookings", "ss-green")
+    with cfc3:
+        kpi_card("Total Due Till Date", _fmt_money(total_cashflow_due), f"Due %: {_fmt_pct(total_cashflow_due_pct)}", "ss-amber")
+
+    if not wing_summary_df.empty:
+        wing_display = wing_summary_df.copy()
+        for c in ["Collection Till Date", "Received Till Date", "Due Till Date"]:
+            wing_display[c] = wing_display[c].apply(_fmt_money)
+        for c in ["Received %", "Due %"]:
+            wing_display[c] = wing_display[c].apply(_fmt_pct)
+
+        st.dataframe(wing_display, use_container_width=True, hide_index=True)
+    else:
+        st.info("No wing-wise cashflow data available.")
+
+    # ============================================================
+    # GRAPHS
+    # ============================================================
+    st.markdown("<div class='ss-section-title'>📊 Summary Graphs</div>", unsafe_allow_html=True)
+
+    g1, g2 = st.columns(2)
+
+    with g1:
+        if monthly_bookings_df.empty:
+            st.info("No monthly booking data available.")
+        else:
+            bookings_chart = alt.Chart(monthly_bookings_df).mark_line(point=True).encode(
+                x=alt.X("Month:N", sort=month_sort_order, title="Month"),
+                y=alt.Y("Bookings:Q", title="Bookings"),
+                tooltip=["Month:N", alt.Tooltip("Bookings:Q", format=",")]
+            ).properties(title="Month-wise Bookings", height=340)
+
+            bookings_labels = alt.Chart(monthly_bookings_df).mark_text(
+                dy=-10, fontWeight="bold", fontSize=11
+            ).encode(
+                x=alt.X("Month:N", sort=month_sort_order),
+                y="Bookings:Q",
+                text=alt.Text("Bookings:Q", format=",")
+            )
+
+            st.altair_chart(bookings_chart + bookings_labels, use_container_width=True)
+
+    with g2:
+        if monthly_marketing_df.empty:
+            st.info("No monthly marketing data available.")
+        else:
+            marketing_chart = alt.Chart(monthly_marketing_df).mark_bar().encode(
+                x=alt.X("Month:N", sort=monthly_marketing_df["Month"].tolist(), title="Month"),
+                y=alt.Y("Marketing Spend:Q", title="Marketing Spend"),
+                tooltip=["Month:N", alt.Tooltip("Marketing Spend:Q", format=",")]
+            ).properties(title="Month-wise Marketing Spend", height=340)
+
+            marketing_labels = alt.Chart(monthly_marketing_df).mark_text(
+                dy=-8, fontWeight="bold", fontSize=10
+            ).encode(
+                x=alt.X("Month:N", sort=monthly_marketing_df["Month"].tolist()),
+                y="Marketing Spend:Q",
+                text=alt.Text("Marketing Spend:Q", format=",")
+            )
+
+            st.altair_chart(marketing_chart + marketing_labels, use_container_width=True)
+
+    g3, g4 = st.columns(2)
+
+    with g3:
+        if exec_summary_df.empty:
+            st.info("No executive data available.")
+        else:
+            exec_plot = exec_summary_df[["Sales Executive", "Bookings", "Attended Visits", "Total Calls"]].melt(
+                id_vars="Sales Executive",
+                var_name="Metric",
+                value_name="Count"
+            )
+
+            exec_chart = alt.Chart(exec_plot).mark_bar().encode(
+                x=alt.X("Sales Executive:N", title="Sales Executive"),
+                xOffset=alt.XOffset("Metric:N"),
+                y=alt.Y("Count:Q", title="Count"),
+                color=alt.Color("Metric:N"),
+                tooltip=["Sales Executive:N", "Metric:N", alt.Tooltip("Count:Q", format=",")]
+            ).properties(title="Sales Executive-wise Bookings, Visits & Calls", height=360)
+
+            st.altair_chart(exec_chart, use_container_width=True)
+
+    with g4:
+        if wing_summary_df.empty:
+            st.info("No wing cashflow chart available.")
+        else:
+            wing_plot = wing_summary_df[["Wing", "Collection Till Date", "Received Till Date", "Due Till Date"]].melt(
+                id_vars="Wing",
+                var_name="Metric",
+                value_name="Amount"
+            )
+
+            wing_chart = alt.Chart(wing_plot).mark_bar().encode(
+                x=alt.X("Wing:N", title="Wing"),
+                xOffset=alt.XOffset("Metric:N"),
+                y=alt.Y("Amount:Q", title="Amount"),
+                color=alt.Color("Metric:N"),
+                tooltip=["Wing:N", "Metric:N", alt.Tooltip("Amount:Q", format=",")]
+            ).properties(title="Wing-wise Collection, Received & Due", height=360)
+
+            st.altair_chart(wing_chart, use_container_width=True)
+
+    if not monthly_visit_call_df.empty:
+        vc_long = monthly_visit_call_df[["Month", "Total Visits", "Total Calls"]].melt(
+            id_vars="Month",
+            var_name="Metric",
+            value_name="Count"
+        )
+
+        vc_chart = alt.Chart(vc_long).mark_line(point=True).encode(
+            x=alt.X("Month:N", sort=monthly_visit_call_df["Month"].tolist(), title="Month"),
+            y=alt.Y("Count:Q", title="Count"),
+            color=alt.Color("Metric:N"),
+            tooltip=["Month:N", "Metric:N", alt.Tooltip("Count:Q", format=",")]
+        ).properties(title="Month-wise Visits vs Calls", height=360)
+
+        st.altair_chart(vc_chart, use_container_width=True)
+
+    # ============================================================
+    # SALES EXECUTIVE SUMMARY TABLE
+    # ============================================================
+    st.markdown("<div class='ss-section-title'>👥 Sales Executive-wise Visits, Calls & Conversion</div>", unsafe_allow_html=True)
+
+    if exec_summary_df.empty:
+        st.info("No sales executive summary available.")
+    else:
+        exec_display = exec_summary_df.copy()
+        for c in ["Call Answer %", "Calls → Visits %", "Visits → Bookings %", "Calls → Bookings %"]:
+            exec_display[c] = exec_display[c].apply(_fmt_pct)
+
+        st.dataframe(exec_display, use_container_width=True, hide_index=True)
+
+    # ============================================================
+    # MONTHWISE SE PENDING TABLE
+    # ============================================================
+    st.markdown("<div class='ss-section-title'>📋 Month-wise Sales Executive Pending Summary</div>", unsafe_allow_html=True)
+    st.caption("Shows stamp duty pending count and agreement not done count by month and sales executive.")
+
+    if month_exec_pending_df.empty:
+        st.info("No pending summary available.")
+    else:
+        st.dataframe(month_exec_pending_df, use_container_width=True, hide_index=True)
+
+        pending_pivot = month_exec_pending_df.pivot_table(
+            index="Month",
+            columns="Sales Executive",
+            values="Total Pending",
+            aggfunc="sum",
+            fill_value=0
+        ).reset_index()
+
+        with st.expander("Pivot View — Month × Sales Executive Total Pending", expanded=False):
+            st.dataframe(pending_pivot, use_container_width=True, hide_index=True)
+
+    # ============================================================
+    # HEADER DIAGNOSTICS
+    # ============================================================
+    with st.expander("Connected Tables & Needful Headers", expanded=False):
+        st.dataframe(pd.DataFrame(required_headers_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("#### Loaded Row Counts")
+        st.dataframe(
+            pd.DataFrame([
+                {"Table": BOOKINGS_TABLE, "Rows Loaded": len(bookings_df)},
+                {"Table": DAILY_VISITS_TABLE, "Rows Loaded": len(daily_df)},
+                {"Table": MARKETING_TABLE, "Rows Loaded": len(marketing_df)},
+                {"Table": CP_PAYOUT_TABLE, "Rows Loaded": len(cp_df)},
+                {"Table": CASHFLOW_MASTER_TABLE, "Rows Loaded": len(master_df)},
+            ]),
+            use_container_width=True,
+            hide_index=True
+        )
+
+    # ============================================================
+    # EMAIL REPORT HELPERS
+    # ============================================================
+    def _df_to_email_table(df: pd.DataFrame, max_rows=30):
+        if df is None or df.empty:
+            return "<p>No data available.</p>"
+
+        show_df = df.head(max_rows).copy()
+        return show_df.to_html(index=False, border=0, classes="email-table")
+
+    def _make_matplotlib_chart(chart_type: str, df: pd.DataFrame, title: str):
+        import matplotlib.pyplot as plt
+
+        buf = io.BytesIO()
+        fig, ax = plt.subplots(figsize=(10, 4.8))
+
+        if df is None or df.empty:
+            ax.text(0.5, 0.5, "No data available", ha="center", va="center", fontsize=14)
+            ax.set_axis_off()
+        elif chart_type == "monthly_bookings":
+            ax.plot(df["Month"], df["Bookings"], marker="o")
+            ax.set_ylabel("Bookings")
+            ax.set_xlabel("Month")
+            ax.tick_params(axis="x", rotation=35)
+            for x, y in zip(df["Month"], df["Bookings"]):
+                ax.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=8)
+
+        elif chart_type == "monthly_marketing":
+            ax.bar(df["Month"], df["Marketing Spend"])
+            ax.set_ylabel("Marketing Spend")
+            ax.set_xlabel("Month")
+            ax.tick_params(axis="x", rotation=35)
+
+        elif chart_type == "exec_summary":
+            plot_df = df[["Sales Executive", "Bookings", "Attended Visits", "Total Calls"]].copy()
+            x = range(len(plot_df))
+            width = 0.25
+            ax.bar([i - width for i in x], plot_df["Bookings"], width=width, label="Bookings")
+            ax.bar(list(x), plot_df["Attended Visits"], width=width, label="Attended Visits")
+            ax.bar([i + width for i in x], plot_df["Total Calls"], width=width, label="Total Calls")
+            ax.set_xticks(list(x))
+            ax.set_xticklabels(plot_df["Sales Executive"], rotation=20, ha="right")
+            ax.set_ylabel("Count")
+            ax.legend()
+
+        elif chart_type == "wing_cashflow":
+            plot_df = df[["Wing", "Collection Till Date", "Received Till Date", "Due Till Date"]].copy()
+            x = range(len(plot_df))
+            width = 0.25
+            ax.bar([i - width for i in x], plot_df["Collection Till Date"], width=width, label="Collection")
+            ax.bar(list(x), plot_df["Received Till Date"], width=width, label="Received")
+            ax.bar([i + width for i in x], plot_df["Due Till Date"], width=width, label="Due")
+            ax.set_xticks(list(x))
+            ax.set_xticklabels(plot_df["Wing"], rotation=0)
+            ax.set_ylabel("Amount")
+            ax.legend()
+
+        ax.set_title(title)
+        fig.tight_layout()
+        fig.savefig(buf, format="png", dpi=160, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return buf.getvalue()
+
+    def _build_email_html(image_cids: dict):
+        cards = [
+            ("Total Bookings", f"{total_bookings:,}", "Bookings table"),
+            ("Agreement Done", f"{total_agreement_done:,}", f"Pending: {total_agreement_pending:,}"),
+            ("Stamp Duty Received", f"{total_stamp_received:,}", f"Pending: {total_stamp_pending:,}"),
+            ("Agreement Value", _fmt_money(total_agreement_value), "Total agreement cost"),
+            ("Marketing Spend", _fmt_money(total_marketing_spend), f"{_fmt_pct(marketing_spend_pct_agreement)} of agreement value"),
+            ("Total Visits", f"{int(total_visits):,}", "Daily visits"),
+            ("Total Calls", f"{int(total_calls):,}", f"Answer rate: {_fmt_pct(call_answer_rate)}"),
+            ("Total Due", _fmt_money(total_cashflow_due), f"Due %: {_fmt_pct(total_cashflow_due_pct)}"),
+        ]
+
+        cards_html = ""
+        for title, value, sub in cards:
+            cards_html += f"""
+            <div class="card">
+                <div class="card-title">{title}</div>
+                <div class="card-value">{value}</div>
+                <div class="card-sub">{sub}</div>
+            </div>
+            """
+
+        chart_html = ""
+        for title, cid in image_cids.items():
+            chart_html += f"""
+            <h2>{title}</h2>
+            <img src="cid:{cid}" style="max-width:100%; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:18px;" />
+            """
+
+        exec_email_df = exec_summary_df.copy()
+        if not exec_email_df.empty:
+            for c in ["Call Answer %", "Calls → Visits %", "Visits → Bookings %", "Calls → Bookings %"]:
+                exec_email_df[c] = exec_email_df[c].apply(_fmt_pct)
+
+        wing_email_df = wing_summary_df.copy()
+        if not wing_email_df.empty:
+            for c in ["Collection Till Date", "Received Till Date", "Due Till Date"]:
+                wing_email_df[c] = wing_email_df[c].apply(_fmt_money)
+            for c in ["Received %", "Due %"]:
+                wing_email_df[c] = wing_email_df[c].apply(_fmt_pct)
+
+        generated_at = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
+
+        return f"""
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    background: #f8fafc;
+                    color: #0f172a;
+                    padding: 18px;
+                }}
+                .shell {{
+                    background: #ffffff;
+                    border-radius: 18px;
+                    padding: 22px;
+                    border: 1px solid #e5e7eb;
+                }}
+                h1 {{
+                    margin: 0 0 4px 0;
+                    font-size: 26px;
+                }}
+                h2 {{
+                    margin-top: 26px;
+                    font-size: 18px;
+                    color: #111827;
+                }}
+                .muted {{
+                    color: #64748b;
+                    font-size: 13px;
+                    margin-bottom: 18px;
+                }}
+                .grid {{
+                    display: grid;
+                    grid-template-columns: repeat(4, minmax(0, 1fr));
+                    gap: 12px;
+                }}
+                .card {{
+                    border: 1px solid #e5e7eb;
+                    border-radius: 14px;
+                    padding: 14px;
+                    background: #f8fafc;
+                    text-align: center;
+                }}
+                .card-title {{
+                    font-size: 12px;
+                    font-weight: 800;
+                    color: #475569;
+                    text-transform: uppercase;
+                }}
+                .card-value {{
+                    font-size: 24px;
+                    font-weight: 900;
+                    margin-top: 8px;
+                    color: #0f172a;
+                }}
+                .card-sub {{
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #64748b;
+                    margin-top: 7px;
+                }}
+                table.email-table {{
+                    border-collapse: collapse;
+                    width: 100%;
+                    font-size: 12px;
+                    margin-top: 8px;
+                }}
+                table.email-table th {{
+                    background: #2563eb;
+                    color: white;
+                    padding: 8px;
+                    text-align: left;
+                }}
+                table.email-table td {{
+                    border-bottom: 1px solid #e5e7eb;
+                    padding: 7px;
+                }}
+                table.email-table tr:nth-child(even) {{
+                    background: #f8fafc;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="shell">
+                <h1>Pratham Vihar — Complete Site Summary</h1>
+                <div class="muted">Generated on {generated_at}</div>
+
+                <div class="grid">
+                    {cards_html}
+                </div>
+
+                {chart_html}
+
+                <h2>Sales Executive-wise Visits, Calls & Conversion</h2>
+                {_df_to_email_table(exec_email_df, max_rows=20)}
+
+                <h2>Wing-wise Collection Summary</h2>
+                {_df_to_email_table(wing_email_df, max_rows=20)}
+
+                <h2>Month-wise Sales Executive Pending Summary</h2>
+                {_df_to_email_table(month_exec_pending_df, max_rows=60)}
+            </div>
+        </body>
+        </html>
+        """
+
+    def _send_summary_email():
+        email_cfg = {}
+        try:
+            email_cfg = dict(st.secrets.get("email", {}))
+        except Exception:
+            email_cfg = {}
+
+        smtp_host = email_cfg.get("smtp_host", "smtp.gmail.com")
+        smtp_port = int(email_cfg.get("smtp_port", 465))
+        sender_email = email_cfg.get("sender_email", "")
+        sender_password = email_cfg.get("sender_password", "")
+        receiver_email = email_cfg.get("receiver_email", "")
+        subject_prefix = email_cfg.get("subject_prefix", "Pratham Vihar Site Summary")
+
+        if not sender_email or not sender_password or not receiver_email:
+            return False, "Email secrets are missing. Please add sender_email, sender_password, and receiver_email in Streamlit secrets."
+
+        if isinstance(receiver_email, str):
+            recipients = [x.strip() for x in receiver_email.split(",") if x.strip()]
+        else:
+            recipients = list(receiver_email)
+
+        if not recipients:
+            return False, "Receiver email is empty."
+
+        chart_specs = [
+            ("Month-wise Bookings", "monthly_bookings", monthly_bookings_df),
+            ("Month-wise Marketing Spend", "monthly_marketing", monthly_marketing_df),
+            ("Sales Executive-wise Performance", "exec_summary", exec_summary_df),
+            ("Wing-wise Collection, Received & Due", "wing_cashflow", wing_summary_df),
+        ]
+
+        image_cids = {}
+        image_payloads = []
+
+        for title, chart_type, chart_df in chart_specs:
+            cid = make_msgid(domain="prathamvihar.local")[1:-1]
+            image_cids[title] = cid
+            png_bytes = _make_matplotlib_chart(chart_type, chart_df, title)
+            image_payloads.append((cid, png_bytes, f"{chart_type}.png"))
+
+        html_body = _build_email_html(image_cids)
+
+        msg = MIMEMultipart("related")
+        msg["Subject"] = f"{subject_prefix} — {datetime.datetime.now().strftime('%d %b %Y')}"
+        msg["From"] = sender_email
+        msg["To"] = ", ".join(recipients)
+        msg["Date"] = formatdate(localtime=True)
+
+        alt_part = MIMEMultipart("alternative")
+        alt_part.attach(MIMEText("Please view this email in HTML format.", "plain"))
+        alt_part.attach(MIMEText(html_body, "html"))
+        msg.attach(alt_part)
+
+        for cid, png_bytes, filename in image_payloads:
+            img = MIMEImage(png_bytes, _subtype="png")
+            img.add_header("Content-ID", f"<{cid}>")
+            img.add_header("Content-Disposition", "inline", filename=filename)
+            msg.attach(img)
+
+        context = ssl.create_default_context()
+
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context) as server:
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, recipients, msg.as_string())
+
+        return True, f"Summary email sent to {', '.join(recipients)}."
+
+    # ============================================================
+    # EMAIL BUTTON
+    # ============================================================
+    st.markdown("<div class='ss-section-title'>📧 Send Complete Summary on Email</div>", unsafe_allow_html=True)
+
+    st.caption("This sends KPI cards, charts, executive summary, wing-wise collection summary, and pending table as an HTML email.")
+
+    if st.button("📧 Send Complete Site Summary Email", type="primary", use_container_width=True):
+        with st.spinner("Preparing and sending summary email..."):
+            ok, msg = _send_summary_email()
+
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
