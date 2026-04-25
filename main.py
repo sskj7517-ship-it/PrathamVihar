@@ -12,6 +12,15 @@ from typing import Optional, Tuple, List, Dict
 import streamlit.components.v1 as components
 
 from supabase_connector import load_all_data, insert_row, update_row, delete_row
+from supabase import create_client
+import streamlit as st
+
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
+
+supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+sheets_connected = True
 
 
 # ---------------- SUPABASE DATA LOAD ----------------
