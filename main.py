@@ -9581,3 +9581,417 @@ with tab1:
                     ).configure_title(anchor="start"),
                     use_container_width=True
                 )
+    # ------------------------------------------------------------
+    # TAB_OFFERS_DASH: Offers Dashboard - SUPABASE COMPATIBLE
+    # Referrals counted only if Agreement Done
+    # ------------------------------------------------------------
+    with TAB_OFFERS_DASH:
+        st.header("📈 Offers Dashboard")
+    
+        # ------------------------------------------------------------
+        # Safe helpers
+        # ------------------------------------------------------------
+        def _safe_text(v):
+            if pd.isna(v):
+                return ""
+            return str(v).strip()
+    
+        def _safe_lower(v):
+            return _safe_text(v).lower()
+    
+        def _safe_casefold(v):
+            return _safe_text(v).casefold()
+    
+        def _clean_select_options(series):
+            cleaned = series.dropna().apply(lambda x: str(x).strip())
+            return sorted([
+                x for x in cleaned.unique().tolist()
+                if x and x.upper() not in ("NAN", "NONE", "NULL")
+            ], key=lambda x: str(x))
+    
+        def canon_month2(s: str) -> str:
+            return str(s).strip().replace(" ", "").replace("-", "").upper() if pd.notna(s) else ""
+    
+        # ------------------------------------------------------------
+        # Base dataframe
+        # Prefer df because your Supabase setup maps columns to old names
+        # ------------------------------------------------------------
+        try:
+            base_df = df.copy()
+        except Exception:
+            base_df = sheet_df.copy()
+    
+        if base_df.empty:
+            st.info("No booking data available for Offers Dashboard.")
+            st.stop()
+    
+        # ------------------------------------------------------------
+        # Column compatibility: Supabase snake_case -> old app names
+        # ------------------------------------------------------------
+        rename_map = {
+            "offer_1": "Offer 1",
+            "offer_2": "Offer 2",
+            "offer_1_rewarded": "Offer 1 Rewarded",
+            "offer_2_rewarded": "Offer 2 Rewarded",
+            "wing": "Wing",
+            "floor": "Floor",
+            "flat_number": "Flat Number",
+            "lead_type": "Lead Type",
+            "referral_given": "Referral Given",
+            "agreement_done": "Agreement Done",
+            "month": "month",
+        }
+    
+        for old_col, new_col in rename_map.items():
+            if old_col in base_df.columns and new_col not in base_df.columns:
+                base_df[new_col] = base_df[old_col]
+    
+        # Month fallback
+        if "month" not in base_df.columns:
+            if "MonthYear" in base_df.columns:
+                base_df["month"] = base_df["MonthYear"]
+            elif "Month" in base_df.columns:
+                base_df["month"] = base_df["Month"]
+            elif "booking_date" in base_df.columns:
+                base_df["booking_date"] = pd.to_datetime(base_df["booking_date"], errors="coerce")
+                base_df["month"] = base_df["booking_date"].dt.strftime("%B %y")
+            elif "Date" in base_df.columns:
+                base_df["Date"] = pd.to_datetime(base_df["Date"], errors="coerce", dayfirst=True)
+                base_df["month"] = base_df["Date"].dt.strftime("%B %y")
+            else:
+                base_df["month"] = ""
+    
+        # Ensure required text columns exist
+        for col in [
+            "Offer 1",
+            "Offer 2",
+            "Offer 1 Rewarded",
+            "Offer 2 Rewarded",
+            "month",
+            "Wing",
+            "Floor",
+            "Flat Number",
+            "Lead Type",
+            "Referral Given",
+            "Agreement Done",
+        ]:
+            if col not in base_df.columns:
+                base_df[col] = ""
+    
+        # Normalize basic fields safely
+        base_df["Offer 1"] = base_df["Offer 1"].apply(_safe_text)
+        base_df["Offer 2"] = base_df["Offer 2"].apply(_safe_text)
+        base_df["Offer 1 Rewarded"] = base_df["Offer 1 Rewarded"].apply(_safe_text)
+        base_df["Offer 2 Rewarded"] = base_df["Offer 2 Rewarded"].apply(_safe_text)
+        base_df["month"] = base_df["month"].apply(_safe_text)
+        base_df["Wing"] = base_df["Wing"].apply(_safe_text)
+        base_df["Flat Number"] = base_df["Flat Number"].apply(_safe_text)
+        base_df["Lead Type"] = base_df["Lead Type"].apply(_safe_text)
+        base_df["Referral Given"] = base_df["Referral Given"].apply(_safe_text)
+        base_df["Agreement Done"] = base_df["Agreement Done"].apply(_safe_text)
+    
+        # Keep floor as display-safe text, but preserve original for sorting/filtering
+        base_df["Floor"] = base_df["Floor"].apply(_safe_text)
+    
+        # ------------------------------------------------------------
+        # Required columns check
+        # ------------------------------------------------------------
+        required_off_cols = [
+            "Offer 1",
+            "Offer 2",
+            "Offer 1 Rewarded",
+            "Offer 2 Rewarded",
+            "month",
+            "Wing",
+            "Floor",
+            "Flat Number",
+        ]
+    
+        missing = [c for c in required_off_cols if c not in base_df.columns]
+    
+        if missing:
+            st.error(f"Missing required columns for Offers Dashboard: {', '.join(missing)}")
+            st.stop()
+    
+        # ------------------------------------------------------------
+        # Offer tall table from Offer 1 / Offer 2
+        # ------------------------------------------------------------
+        tall_rows = []
+    
+        for _, r in base_df.iterrows():
+            o1 = _safe_text(r.get("Offer 1"))
+            o2 = _safe_text(r.get("Offer 2"))
+    
+            o1r = _safe_lower(r.get("Offer 1 Rewarded"))
+            o2r = _safe_lower(r.get("Offer 2 Rewarded"))
+    
+            if o1:
+                tall_rows.append({
+                    "offer": o1,
+                    "rewarded": o1r in ("rewarded 1", "true", "yes", "1", "y", "✓")
+                })
+    
+            if o2:
+                tall_rows.append({
+                    "offer": o2,
+                    "rewarded": o2r in ("rewarded 2", "true", "yes", "1", "y", "✓")
+                })
+    
+        tall = (
+            pd.DataFrame(tall_rows)
+            if tall_rows
+            else pd.DataFrame(columns=["offer", "rewarded"])
+        )
+    
+        OFFERS_LIST = [
+            "1 Gram Gold Coin",
+            "2 Gram Gold Coin",
+            "200 Gram Silver",
+            "Kitchen Trolley",
+            "25000 Electronic Voucher",
+        ]
+    
+        def stats_for(name: str):
+            if tall.empty:
+                return 0, 0, 0
+    
+            sub = tall[
+                tall["offer"]
+                .astype(str)
+                .str.strip()
+                .str.casefold()
+                .eq(name.strip().casefold())
+            ]
+    
+            total = int(len(sub))
+            rewarded = int(sub["rewarded"].sum())
+            pending = max(total - rewarded, 0)
+    
+            return total, rewarded, pending
+    
+        # ------------------------------------------------------------
+        # Referrals - only Agreement Done rows
+        # ------------------------------------------------------------
+        REF_LEAD_COL = "Lead Type"
+        REF_GIVEN_COL = "Referral Given"
+        AGREEMENT_COL = "Agreement Done"
+    
+        ref_missing = [
+            c for c in [REF_LEAD_COL, REF_GIVEN_COL, AGREEMENT_COL]
+            if c not in base_df.columns
+        ]
+    
+        ref_total_done = 0
+        ref_pending = 0
+        ref_rewarded = 0
+    
+        if ref_missing:
+            st.warning(f"Referral KPIs: missing columns: {', '.join(ref_missing)}")
+        else:
+            df_ref = base_df.copy()
+    
+            lead_norm = df_ref[REF_LEAD_COL].apply(_safe_casefold)
+            is_referral = lead_norm.str.contains("ref", na=False)
+    
+            df_ref = df_ref[is_referral].copy()
+    
+            agr_done_mask = df_ref[AGREEMENT_COL].apply(_safe_lower).eq("done")
+            df_ref_done = df_ref[agr_done_mask].copy()
+    
+            ref_total_done = int(len(df_ref_done))
+    
+            given_norm = df_ref_done[REF_GIVEN_COL].apply(_safe_casefold)
+            given_referrals = int(given_norm.str.contains("given", na=False).sum())
+    
+            ref_pending = max(ref_total_done - given_referrals, 0)
+            ref_rewarded = max(ref_total_done - ref_pending, 0)
+    
+        # ------------------------------------------------------------
+        # KPI: Total Offers Given
+        # Offer 1/2 + agreement-done referrals
+        # ------------------------------------------------------------
+        total_offers_count = int(len(tall)) + int(ref_total_done)
+    
+        st.markdown(
+            f"""
+            <div class='metric-card'>
+                <h3>Total Offers Given</h3>
+                <p>{total_offers_count}</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
+        # ------------------------------------------------------------
+        # Referral KPI row
+        # ------------------------------------------------------------
+        r7c1, r7c2, r7c3 = st.columns(3)
+    
+        with r7c1:
+            st.markdown(
+                f"""
+                <div class='metric-card'>
+                    <h3>Total Referrals</h3>
+                    <p>{ref_total_done}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    
+        with r7c2:
+            st.markdown(
+                f"""
+                <div class='metric-card'>
+                    <h3>Pending Referrals</h3>
+                    <p>{ref_pending}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    
+        with r7c3:
+            st.markdown(
+                f"""
+                <div class='metric-card'>
+                    <h3>Rewarded Referrals</h3>
+                    <p>{ref_rewarded}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    
+        # ------------------------------------------------------------
+        # Per-offer KPIs
+        # ------------------------------------------------------------
+        def render_offer_row(offer_name: str):
+            total, rewarded, pending = stats_for(offer_name)
+    
+            c1, c2, c3 = st.columns(3)
+    
+            c1.markdown(
+                f"""
+                <div class='metric-card'>
+                    <h3>{offer_name} — Total</h3>
+                    <p>{total}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    
+            c2.markdown(
+                f"""
+                <div class='metric-card'>
+                    <h3>{offer_name} — Pending</h3>
+                    <p>{pending}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    
+            c3.markdown(
+                f"""
+                <div class='metric-card'>
+                    <h3>{offer_name} — Rewarded</h3>
+                    <p>{rewarded}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    
+        for offer_nm in OFFERS_LIST:
+            render_offer_row(offer_nm)
+    
+        # ------------------------------------------------------------
+        # Offers Lookup
+        # ------------------------------------------------------------
+        st.markdown(
+            "<div class='section-subtitle'>🎁 Offers Lookup</div>",
+            unsafe_allow_html=True
+        )
+    
+        base_df["__MonthCanon"] = base_df["month"].map(canon_month2)
+    
+        month_values = [
+            m for m in base_df["__MonthCanon"].dropna().unique().tolist()
+            if _safe_text(m)
+        ]
+    
+        wing_values = _clean_select_options(base_df["Wing"])
+    
+        floor_values = _clean_select_options(base_df["Floor"])
+    
+        def _floor_sort_key(x):
+            try:
+                return (0, int(float(str(x))))
+            except Exception:
+                return (1, str(x))
+    
+        months_o = ["All"] + sorted(month_values, key=str)
+        wings_o = ["All"] + wing_values
+        floors_o = ["All"] + sorted(floor_values, key=_floor_sort_key)
+    
+        lc1, lc2, lc3 = st.columns(3)
+    
+        sel_wing = lc1.selectbox(
+            "Select Wing",
+            wings_o,
+            key="tab1_off_wing"
+        )
+    
+        sel_floor = lc2.selectbox(
+            "Select Floor",
+            floors_o,
+            key="tab1_off_floor"
+        )
+    
+        sel_month = lc3.selectbox(
+            "Select Month",
+            months_o,
+            key="tab1_off_month"
+        )
+    
+        fdf = base_df.copy()
+    
+        if sel_wing != "All":
+            fdf = fdf[fdf["Wing"].astype(str).str.strip() == sel_wing]
+    
+        if sel_floor != "All":
+            fdf = fdf[fdf["Floor"].astype(str).str.strip() == sel_floor]
+    
+        if sel_month != "All":
+            fdf = fdf[fdf["__MonthCanon"] == sel_month]
+    
+        has_offer = (
+            fdf["Offer 1"].apply(_safe_text).ne("")
+            | fdf["Offer 2"].apply(_safe_text).ne("")
+        )
+    
+        fdf = fdf[has_offer].copy()
+    
+        st.markdown(
+            f"""
+            <div class='chips'>
+                <span class='chip'><span class='dot'></span> Wing: {sel_wing}</span>
+                <span class='chip'><span class='dot'></span> Floor: {sel_floor}</span>
+                <span class='chip'><span class='dot'></span> Month: {sel_month}</span>
+                <span class='chip ok'><span class='dot'></span> Matches: {len(fdf)}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
+        if fdf.empty:
+            st.warning("No Offer data available for selected criteria.")
+        else:
+            show_cols = ["Flat Number", "Offer 1", "Offer 2"]
+    
+            show = fdf[show_cols].copy()
+    
+            show["Flat Number"] = show["Flat Number"].apply(_safe_text)
+            show["Offer 1"] = show["Offer 1"].apply(_safe_text)
+            show["Offer 2"] = show["Offer 2"].apply(_safe_text)
+    
+            st.markdown(
+                show.to_html(index=False, classes="styled-table"),
+                unsafe_allow_html=True
+            )
