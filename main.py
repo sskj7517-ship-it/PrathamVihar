@@ -22582,9 +22582,10 @@ with tab15:
         _render_inventory_details_table(details_df)
 
 # ============================================================
-# TAB 16 — CASHFLOW
-# Supabase table used: public.cashflow_slab_master
-# Booking data still uses your existing Booking Google Sheet / worksheet
+# TAB 16 — Cashflow
+# Uses:
+#   - Booking data from Google Sheet worksheet / booking_worksheet
+#   - Slab master from Supabase table: cashflow_slab_master
 # ============================================================
 
 with tab16:
@@ -22596,7 +22597,16 @@ with tab16:
 
     st.header("💰 Cashflow")
 
-    if not sheets_connected or worksheet is None:
+    # ============================================================
+    # SAFE CONNECTION LOOKUPS
+    # ============================================================
+    booking_worksheet = globals().get("worksheet", None)
+
+    # Optional fallback if your booking worksheet variable has another name
+    if booking_worksheet is None:
+        booking_worksheet = globals().get("booking_worksheet", None)
+
+    if not globals().get("sheets_connected", False) or booking_worksheet is None:
         st.warning("Booking sheet is not connected.")
         st.stop()
 
@@ -22611,15 +22621,13 @@ with tab16:
 
     CASHFLOW_MASTER_TABLE = "cashflow_slab_master"
 
-    # Display headers used inside app
-    CASHFLOW_MASTER_HEADERS = ["id", "Wing", "Slab Name", "Completed", "Completed On"]
-
-    # Supabase DB columns
-    CF_ID_DB = "id"
-    CF_WING_DB = "wing"
-    CF_SLAB_NAME_DB = "slab_name"
-    CF_COMPLETED_DB = "completed"
-    CF_COMPLETED_ON_DB = "completed_on"
+    CASHFLOW_MASTER_HEADERS = [
+        "id",
+        "Wing",
+        "Slab Name",
+        "Completed",
+        "Completed On",
+    ]
 
     ALL_SLABS = [
         "BOOKING AMOUNT",
@@ -22858,23 +22866,16 @@ with tab16:
         }
         return wing_map.get(s, _safe_str(x))
 
-    def _date_to_iso_or_none(x):
-        if x is None:
+    def _parse_date_safe(x):
+        if x is None or str(x).strip() == "":
             return None
-        if isinstance(x, datetime.datetime):
-            return x.date().strftime("%Y-%m-%d")
-        if isinstance(x, datetime.date):
-            return x.strftime("%Y-%m-%d")
-
-        s = _safe_str(x)
-        if not s:
+        try:
+            dt = pd.to_datetime(x, errors="coerce")
+            if pd.isna(dt):
+                return None
+            return dt.date()
+        except Exception:
             return None
-
-        dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
-        if pd.isna(dt):
-            return None
-
-        return dt.date().strftime("%Y-%m-%d")
 
     def _write_df_to_sheet(ws, df_to_save):
         out = df_to_save.copy().fillna("")
@@ -22887,109 +22888,20 @@ with tab16:
         )
 
     # ============================================================
-    # SUPABASE CASHFLOW MASTER HELPERS
+    # BOOKING DATA HELPERS
     # ============================================================
-    if "cashflow_master_cache_buster" not in st.session_state:
-        st.session_state["cashflow_master_cache_buster"] = 0
-
-    def _clear_cashflow_master_cache():
-        st.session_state["cashflow_master_cache_buster"] += 1
-        try:
-            _fetch_cashflow_master_raw.clear()
-        except Exception:
-            pass
-
-    @st.cache_data(ttl=180, show_spinner=False)
-    def _fetch_cashflow_master_raw(cache_buster: int = 0) -> pd.DataFrame:
-        try:
-            res = (
-                supabase
-                .table(CASHFLOW_MASTER_TABLE)
-                .select("*")
-                .order(CF_WING_DB, desc=False)
-                .order(CF_ID_DB, desc=False)
-                .execute()
-            )
-            rows = getattr(res, "data", []) or []
-            return pd.DataFrame(rows)
-        except Exception:
-            return pd.DataFrame()
-
-    def _normalize_cashflow_master_df(raw_df: pd.DataFrame) -> pd.DataFrame:
-        if raw_df is None or raw_df.empty:
-            return pd.DataFrame(columns=CASHFLOW_MASTER_HEADERS)
-
-        dfm = raw_df.copy()
-
-        for c in [CF_ID_DB, CF_WING_DB, CF_SLAB_NAME_DB, CF_COMPLETED_DB, CF_COMPLETED_ON_DB]:
-            if c not in dfm.columns:
-                dfm[c] = ""
-
-        out = pd.DataFrame()
-        out["id"] = pd.to_numeric(dfm[CF_ID_DB], errors="coerce").fillna(0).astype(int)
-        out["Wing"] = dfm[CF_WING_DB].apply(_cf_norm_wing)
-        out["Slab Name"] = dfm[CF_SLAB_NAME_DB].fillna("").astype(str).str.strip().str.upper()
-        out["Completed"] = dfm[CF_COMPLETED_DB].fillna("").astype(str).str.strip()
-        out["Completed On"] = dfm[CF_COMPLETED_ON_DB].fillna("").astype(str).str.strip()
-
-        out = out[(out["Wing"] != "") & (out["Slab Name"] != "")].copy()
-        return out[CASHFLOW_MASTER_HEADERS].copy()
-
-    def _refresh_master_df() -> pd.DataFrame:
-        raw = _fetch_cashflow_master_raw(st.session_state["cashflow_master_cache_buster"])
-        dfm = _normalize_cashflow_master_df(raw)
-
-        for c in CASHFLOW_MASTER_HEADERS:
-            if c not in dfm.columns:
-                dfm[c] = ""
-
-        return dfm.copy()
-
-    def _insert_cashflow_master_rows(rows):
-        if not rows:
-            return
-
-        payload = []
-        for r in rows:
-            payload.append({
-                CF_WING_DB: _cf_norm_wing(r.get("Wing", "")),
-                CF_SLAB_NAME_DB: _safe_str(r.get("Slab Name", "")).upper(),
-                CF_COMPLETED_DB: _safe_str(r.get("Completed", "")),
-                CF_COMPLETED_ON_DB: _date_to_iso_or_none(r.get("Completed On", "")),
-            })
-
-        supabase.table(CASHFLOW_MASTER_TABLE).insert(payload).execute()
-        _clear_cashflow_master_cache()
-
-    def _update_cashflow_master_row(row_id: int, completed_value: str, completed_on_value):
-        completed_value = _safe_str(completed_value)
-        completed_on_iso = _date_to_iso_or_none(completed_on_value) if completed_value.lower() == "completed" else None
-
-        payload = {
-            CF_COMPLETED_DB: completed_value,
-            CF_COMPLETED_ON_DB: completed_on_iso,
-        }
-
-        supabase.table(CASHFLOW_MASTER_TABLE).update(payload).eq(CF_ID_DB, int(row_id)).execute()
-        _clear_cashflow_master_cache()
-
-    def _insert_single_cashflow_master_row(wing: str, slab_name: str, completed_value: str, completed_on_value):
-        completed_value = _safe_str(completed_value)
-        completed_on_iso = _date_to_iso_or_none(completed_on_value) if completed_value.lower() == "completed" else None
-
-        payload = {
-            CF_WING_DB: _cf_norm_wing(wing),
-            CF_SLAB_NAME_DB: _safe_str(slab_name).upper(),
-            CF_COMPLETED_DB: completed_value,
-            CF_COMPLETED_ON_DB: completed_on_iso,
-        }
-
-        supabase.table(CASHFLOW_MASTER_TABLE).insert(payload).execute()
-        _clear_cashflow_master_cache()
-
     def _refresh_booking_df():
-        dfx = safe_get_sheet_df(worksheet)
-        return dfx.copy() if not dfx.empty else pd.DataFrame()
+        try:
+            records = booking_worksheet.get_all_records()
+            return pd.DataFrame(records)
+        except Exception:
+            try:
+                if "safe_get_sheet_df" in globals():
+                    dfx = safe_get_sheet_df(booking_worksheet)
+                    return dfx.copy() if not dfx.empty else pd.DataFrame()
+            except Exception:
+                pass
+        return pd.DataFrame()
 
     def _ensure_booking_columns(dfx):
         dfx = dfx.copy()
@@ -23020,16 +22932,94 @@ with tab16:
 
         return dfx
 
-    def _missing_master_rows(master_df, booking_df):
-        if master_df is None or master_df.empty:
-            master_df = pd.DataFrame(columns=CASHFLOW_MASTER_HEADERS)
+    # ============================================================
+    # SUPABASE CASHFLOW MASTER HELPERS
+    # ============================================================
+    def _db_master_to_app_df(rows):
+        dfm = pd.DataFrame(rows or [])
+
+        if dfm.empty:
+            dfm = pd.DataFrame(columns=["id", "wing", "slab_name", "completed", "completed_on"])
+
+        for c in ["id", "wing", "slab_name", "completed", "completed_on"]:
+            if c not in dfm.columns:
+                dfm[c] = ""
+
+        dfm = dfm.rename(columns={
+            "wing": "Wing",
+            "slab_name": "Slab Name",
+            "completed": "Completed",
+            "completed_on": "Completed On",
+        })
+
+        for c in CASHFLOW_MASTER_HEADERS:
+            if c not in dfm.columns:
+                dfm[c] = ""
+
+        dfm["Wing"] = dfm["Wing"].apply(_cf_norm_wing)
+        dfm["Slab Name"] = dfm["Slab Name"].fillna("").astype(str).str.strip().str.upper()
+        dfm["Completed"] = dfm["Completed"].fillna("").astype(str).str.strip()
+        dfm["Completed On"] = dfm["Completed On"].fillna("").astype(str).str.strip()
+
+        return dfm[CASHFLOW_MASTER_HEADERS].copy()
+
+    def _refresh_master_df():
+        try:
+            res = (
+                supabase
+                .table(CASHFLOW_MASTER_TABLE)
+                .select("id, wing, slab_name, completed, completed_on")
+                .execute()
+            )
+            rows = getattr(res, "data", None) or []
+            return _db_master_to_app_df(rows)
+        except Exception as e:
+            st.error(f"Could not read Supabase table `{CASHFLOW_MASTER_TABLE}`: {e}")
+            return pd.DataFrame(columns=CASHFLOW_MASTER_HEADERS)
+
+    def _insert_master_rows(rows_to_insert):
+        if not rows_to_insert:
+            return
+
+        payload = []
+        for r in rows_to_insert:
+            payload.append({
+                "wing": r.get("Wing", ""),
+                "slab_name": r.get("Slab Name", ""),
+                "completed": r.get("Completed", ""),
+                "completed_on": r.get("Completed On") or None,
+            })
+
+        try:
+            supabase.table(CASHFLOW_MASTER_TABLE).insert(payload).execute()
+        except Exception as e:
+            st.error(f"Could not insert missing cashflow master rows: {e}")
+
+    def _update_master_row(row_id, wing, slab_name, completed, completed_on):
+        payload = {
+            "wing": wing,
+            "slab_name": slab_name,
+            "completed": completed,
+            "completed_on": completed_on,
+        }
+
+        try:
+            if row_id not in ("", None) and not pd.isna(row_id):
+                supabase.table(CASHFLOW_MASTER_TABLE).update(payload).eq("id", row_id).execute()
+            else:
+                supabase.table(CASHFLOW_MASTER_TABLE).update(payload).eq("wing", wing).eq("slab_name", slab_name).execute()
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
+    def _ensure_master_rows(master_df, booking_df):
+        master_df = master_df.copy()
 
         for c in CASHFLOW_MASTER_HEADERS:
             if c not in master_df.columns:
                 master_df[c] = ""
 
-        if "Wing" in master_df.columns:
-            master_df["Wing"] = master_df["Wing"].apply(_cf_norm_wing)
+        master_df["Wing"] = master_df["Wing"].apply(_cf_norm_wing)
 
         wings = []
         if "Wing" in booking_df.columns:
@@ -23046,12 +23036,11 @@ with tab16:
         existing_pairs = set(
             zip(
                 master_df["Wing"].astype(str).str.strip().str.upper(),
-                master_df["Slab Name"].astype(str).str.strip().str.upper(),
+                master_df["Slab Name"].astype(str).str.strip().str.upper()
             )
         )
 
         add_rows = []
-
         for wing in wings:
             for slab in CONSTRUCTION_SLABS:
                 pair = (str(wing).strip().upper(), slab.strip().upper())
@@ -23063,19 +23052,11 @@ with tab16:
                         "Completed On": "",
                     })
 
-        return add_rows
-
-    def _ensure_master_rows(master_df, booking_df):
-        add_rows = _missing_master_rows(master_df, booking_df)
-
         if add_rows:
-            try:
-                _insert_cashflow_master_rows(add_rows)
-                master_df = _refresh_master_df()
-            except Exception as e:
-                st.warning(f"Could not seed missing cashflow slab rows in Supabase: {e}")
+            _insert_master_rows(add_rows)
+            master_df = _refresh_master_df()
 
-        return master_df.copy()
+        return master_df
 
     # ============================================================
     # CASHFLOW CALC HELPERS
@@ -23110,12 +23091,10 @@ with tab16:
             "_GST_TOTAL": gst_amt,
             "_GROSS_VALUE": gross_value,
         }
-
         return amt_map
 
     def _highest_completed_slab(wing, master_df):
         wing = _cf_norm_wing(wing).upper()
-
         sub = master_df[
             master_df["Wing"].astype(str).str.strip().str.upper() == wing
         ].copy()
@@ -23126,29 +23105,21 @@ with tab16:
         completed_set = set(
             sub.loc[
                 sub["Completed"].astype(str).str.strip().str.lower().eq("completed"),
-                "Slab Name",
-            ]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .tolist()
+                "Slab Name"
+            ].astype(str).str.strip().str.upper().tolist()
         )
 
         highest = None
-
         for slab in CONSTRUCTION_SLABS:
             if slab.strip().upper() in completed_set:
                 highest = slab
-
         return highest
 
     def _full_allocation_order(row):
         order = ["BOOKING AMOUNT"]
-
         if _is_done(row.get("Agreement Done", "")):
             order.append("AGREEMENT")
             order.extend(CONSTRUCTION_SLABS)
-
         return order
 
     def _due_till_date_order(row, master_df):
@@ -23157,7 +23128,6 @@ with tab16:
         if _is_done(row.get("Agreement Done", "")):
             order.append("AGREEMENT")
             highest = _highest_completed_slab(row.get("Wing", ""), master_df)
-
             if highest is not None:
                 upto = CONSTRUCTION_SLABS.index(highest)
                 order.extend(CONSTRUCTION_SLABS[:upto + 1])
@@ -23177,7 +23147,6 @@ with tab16:
             take = min(remaining, due_amt)
             alloc[head] = round(take, 2)
             remaining = round(remaining - take, 2)
-
             if remaining <= 0:
                 break
 
@@ -23193,12 +23162,7 @@ with tab16:
         }
 
     def _stamp_duty_amount(row):
-        return round(
-            _to_num(row.get("Agreement Cost", 0)) *
-            _to_num(row.get("Stamp Duty %", 0)) /
-            100.0,
-            2
-        )
+        return round(_to_num(row.get("Agreement Cost", 0)) * _to_num(row.get("Stamp Duty %", 0)) / 100.0, 2)
 
     def _customer_summary(row, master_df):
         alloc_data = _allocate_cumulative_received(row)
@@ -23229,9 +23193,9 @@ with tab16:
         overall_order = _full_allocation_order(row)
         overall_collection_total = sum(_to_num(amt_map.get(h, 0)) for h in overall_order)
         overall_received_total = (
-            received_amount_punched +
-            (stamp_amt if stamp_paid else 0.0) +
-            (REGISTRATION_AMOUNT if registration_paid else 0.0)
+            received_amount_punched
+            + (stamp_amt if stamp_paid else 0.0)
+            + (REGISTRATION_AMOUNT if registration_paid else 0.0)
         )
         overall_pending_total = max(
             overall_collection_total + stamp_pending + registration_pending - overall_received_total,
@@ -23267,23 +23231,20 @@ with tab16:
         due_order = set(sm["due_order"])
 
         rows = []
-
         for head in GRAPH_HEAD_ORDER:
             due_amt = _to_num(amt_map.get(head, 0))
             rec_amt = _to_num(alloc_map.get(head, 0))
-
             rows.append({
                 "Head": head,
                 "Amount": due_amt,
                 "Allocated from Received": rec_amt,
                 "Balance": max(due_amt - rec_amt, 0.0),
-                "Due Till Date?": "Yes" if head in due_order else "No",
+                "Due Till Date?": "Yes" if head in due_order else "No"
             })
 
         out = pd.DataFrame(rows)
         out["Head"] = pd.Categorical(out["Head"], categories=GRAPH_HEAD_ORDER, ordered=True)
         out = out.sort_values("Head").reset_index(drop=True)
-
         return out
 
     def _build_wing_summary(booking_df, master_df):
@@ -23291,20 +23252,12 @@ with tab16:
             return pd.DataFrame()
 
         rows = []
-
         wings = sorted(
-            booking_df["Wing"]
-            .astype(str)
-            .str.strip()
-            .replace("", pd.NA)
-            .dropna()
-            .unique()
-            .tolist()
+            booking_df["Wing"].astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
         ) if "Wing" in booking_df.columns else []
 
         for wing in wings:
             sub = booking_df[booking_df["Wing"].astype(str).str.strip() == wing].copy()
-
             if sub.empty:
                 continue
 
@@ -23327,7 +23280,7 @@ with tab16:
                 "Due Till Date": wing_due,
                 "Received %": wing_received_pct,
                 "Due %": wing_due_pct,
-                "Status": _highest_completed_slab(wing, master_df) or "Booking / Agreement Stage",
+                "Status": _highest_completed_slab(wing, master_df) or "Booking / Agreement Stage"
             })
 
         return pd.DataFrame(rows)
@@ -23350,17 +23303,14 @@ with tab16:
     def _cf_base_category(wing, floor_no, series):
         if (wing, floor_no, series) in DUE_MISSING_UNITS:
             return "MISSING"
-
         if (floor_no, series) in DUE_REFUGE_RULES.get(wing, set()):
             return "REFUGE"
 
         mhada_rule = DUE_MHADA_RULES.get(wing, {"floors": set(), "series": set()})
-
         if floor_no in mhada_rule["floors"] and series in mhada_rule["series"]:
             return "MHADA"
 
         flat_no = _cf_flat_number_from_floor_series(floor_no, series)
-
         if flat_no in DUE_LANDOWNER_FLATS.get(wing, set()):
             return "LANDOWNER"
 
@@ -23369,10 +23319,8 @@ with tab16:
     def _cf_get_unit_type(wing, floor_no, series, base_category):
         if base_category == "REFUGE":
             return "Refuge"
-
         if base_category == "MISSING":
             return ""
-
         return DUE_TYPE_OVERRIDES.get((wing, floor_no, series), DUE_SERIES_TYPE_MAP.get(series, ""))
 
     def _build_due_visual_inventory_master():
@@ -23400,18 +23348,9 @@ with tab16:
 
     def _prepare_due_booking_map(booking_df_in, master_df_in):
         cols = [
-            "Wing",
-            "Flat Number",
-            "Customer Name",
-            "Due Amount",
-            "Collection Till Date",
-            "Received Till Date",
-            "Gross Agreement Value",
-            "Agreement Cost",
-            "Due %",
-            "Received %",
+            "Wing", "Flat Number", "Customer Name", "Due Amount", "Collection Till Date",
+            "Received Till Date", "Gross Agreement Value", "Agreement Cost", "Due %", "Received %"
         ]
-
         if booking_df_in is None or booking_df_in.empty:
             return pd.DataFrame(columns=cols)
 
@@ -23423,10 +23362,8 @@ with tab16:
         d = d[(d["Wing"] != "") & (d["Flat Number"] != "")].copy()
 
         rows = []
-
         for _, r in d.iterrows():
             sm = _customer_summary(r, master_df_in)
-
             rows.append({
                 "Wing": _cf_norm_wing(r.get("Wing", "")),
                 "Flat Number": _cf_norm_flat(r.get("Flat Number", "")),
@@ -23441,23 +23378,16 @@ with tab16:
             })
 
         out = pd.DataFrame(rows)
-
         if out.empty:
             return pd.DataFrame(columns=cols)
 
-        out = (
-            out
-            .sort_values(["Wing", "Flat Number"])
-            .drop_duplicates(subset=["Wing", "Flat Number"], keep="last")
-        )
-
+        out = out.sort_values(["Wing", "Flat Number"]).drop_duplicates(subset=["Wing", "Flat Number"], keep="last")
         return out[cols].copy()
 
     def _build_due_matrix_df(booking_df_in, master_df_in):
         base_df = _build_due_visual_inventory_master().copy()
 
         due_booking_df = _prepare_due_booking_map(booking_df_in, master_df_in)
-
         if not due_booking_df.empty:
             base_df = base_df.merge(due_booking_df, on=["Wing", "Flat Number"], how="left")
         else:
@@ -23488,7 +23418,6 @@ with tab16:
                 base_df[c] = 0.0
             base_df[c] = pd.to_numeric(base_df[c], errors="coerce").fillna(0.0)
 
-        # MHADA and LANDOWNER must not carry booking/due logic
         special_mask = base_df["Base Category"].isin(["LANDOWNER", "MHADA"])
         base_df.loc[special_mask, "Customer Name"] = ""
         base_df.loc[
@@ -23519,10 +23448,8 @@ with tab16:
 
     def _truncate_name_for_cell(name, max_len=15):
         name = _safe_str(name)
-
         if len(name) <= max_len:
             return name
-
         return name[:max_len - 1] + "…"
 
     def _due_cell_view(row):
@@ -23535,14 +23462,7 @@ with tab16:
         rec_pct = _to_num(row.get("Received %", 0))
 
         if bucket == "MISSING":
-            return {
-                "css": "due-hidden",
-                "flat": "",
-                "sub1": "",
-                "sub2": "",
-                "sub3": "",
-                "tooltip": "",
-            }
+            return {"css": "due-hidden", "flat": "", "sub1": "", "sub2": "", "sub3": "", "tooltip": ""}
 
         if bucket == "REFUGE":
             return {
@@ -23551,7 +23471,7 @@ with tab16:
                 "sub1": "Refuge",
                 "sub2": "",
                 "sub3": "",
-                "tooltip": f"Flat: {flat_no}\nCategory: Refuge",
+                "tooltip": f"Flat: {flat_no}\nCategory: Refuge"
             }
 
         if bucket == "LANDOWNER":
@@ -23561,7 +23481,7 @@ with tab16:
                 "sub1": "Landowner",
                 "sub2": unit_type,
                 "sub3": "",
-                "tooltip": f"Flat: {flat_no}\nCategory: Landowner\nType: {unit_type}",
+                "tooltip": f"Flat: {flat_no}\nCategory: Landowner\nType: {unit_type}"
             }
 
         if bucket == "MHADA":
@@ -23571,7 +23491,7 @@ with tab16:
                 "sub1": "MHADA",
                 "sub2": unit_type,
                 "sub3": "",
-                "tooltip": f"Flat: {flat_no}\nCategory: MHADA\nType: {unit_type}",
+                "tooltip": f"Flat: {flat_no}\nCategory: MHADA\nType: {unit_type}"
             }
 
         if bucket == "BOOKED_DUE":
@@ -23581,10 +23501,7 @@ with tab16:
                 "sub1": _truncate_name_for_cell(customer, 16),
                 "sub2": _fmt_money(due_amt),
                 "sub3": f"D {due_pct:.0f}% | R {rec_pct:.0f}%",
-                "tooltip": (
-                    f"Flat: {flat_no}\nCustomer: {customer}\nDue: {_fmt_money(due_amt)}"
-                    f"\nDue %: {due_pct:.1f}%\nReceived %: {rec_pct:.1f}%\nType: {unit_type}"
-                ),
+                "tooltip": f"Flat: {flat_no}\nCustomer: {customer}\nDue: {_fmt_money(due_amt)}\nDue %: {due_pct:.1f}%\nReceived %: {rec_pct:.1f}%\nType: {unit_type}"
             }
 
         if bucket == "BOOKED_CLEAR":
@@ -23594,10 +23511,7 @@ with tab16:
                 "sub1": _truncate_name_for_cell(customer, 16),
                 "sub2": "No Due",
                 "sub3": f"D {due_pct:.0f}% | R {rec_pct:.0f}%",
-                "tooltip": (
-                    f"Flat: {flat_no}\nCustomer: {customer}\nDue: {_fmt_money(due_amt)}"
-                    f"\nDue %: {due_pct:.1f}%\nReceived %: {rec_pct:.1f}%\nType: {unit_type}"
-                ),
+                "tooltip": f"Flat: {flat_no}\nCustomer: {customer}\nDue: {_fmt_money(due_amt)}\nDue %: {due_pct:.1f}%\nReceived %: {rec_pct:.1f}%\nType: {unit_type}"
             }
 
         return {
@@ -23606,7 +23520,7 @@ with tab16:
             "sub1": "Available",
             "sub2": unit_type,
             "sub3": "",
-            "tooltip": f"Flat: {flat_no}\nType: {unit_type}\nStatus: Available",
+            "tooltip": f"Flat: {flat_no}\nType: {unit_type}\nStatus: Available"
         }
 
     def _build_due_wing_matrix_html(wing_df, wing_name):
@@ -23619,10 +23533,8 @@ with tab16:
         html.append("<thead>")
         html.append(f"<tr class='due-title-row'><th colspan='{len(layout_order)}'>{escape(wing_name)} — Due Table</th></tr>")
         html.append("<tr>")
-
         for _ in layout_order:
             html.append("<th class='due-blank-head'></th>")
-
         html.append("</tr>")
         html.append("</thead>")
         html.append("<tbody>")
@@ -23649,7 +23561,6 @@ with tab16:
             html.append("</tr>")
 
         html.append("</tbody></table></div>")
-
         return "".join(html)
 
     def _build_due_widget_html(due_matrix_df, wing_summary_df_in):
@@ -23946,7 +23857,6 @@ with tab16:
 
     live_master_df = _refresh_master_df()
     live_master_df = _ensure_master_rows(live_master_df, live_booking_df)
-    live_master_df = _refresh_master_df()
 
     wing_summary_df = _build_wing_summary(live_booking_df, live_master_df)
 
@@ -23968,7 +23878,6 @@ with tab16:
         total_due_pct_all = _pct(total_due_all, total_collection_all)
 
         t1, t2, t3 = st.columns(3)
-
         with t1:
             _cf_card(
                 "Total Collection — All Wings",
@@ -23976,7 +23885,6 @@ with tab16:
                 "cf-blue",
                 "30% at plinth means 30% of Agreement Cost + GST"
             )
-
         with t2:
             _cf_card(
                 "Total Received — All Wings",
@@ -23984,7 +23892,6 @@ with tab16:
                 "cf-green",
                 f"Received {total_received_pct_all:.1f}%"
             )
-
         with t3:
             _cf_card(
                 "Total Due — All Wings",
@@ -24000,36 +23907,14 @@ with tab16:
         else:
             for _, wr in wing_summary_df.iterrows():
                 c1, c2, c3, c4 = st.columns(4)
-
                 with c1:
-                    _cf_card(
-                        f"{wr['Wing']} — Collection Till Date",
-                        _fmt_money(wr["Collection Till Date"]),
-                        "cf-slate"
-                    )
-
+                    _cf_card(f"{wr['Wing']} — Collection Till Date", _fmt_money(wr["Collection Till Date"]), "cf-slate")
                 with c2:
-                    _cf_card(
-                        f"{wr['Wing']} — Received Till Date",
-                        _fmt_money(wr["Received Till Date"]),
-                        "cf-green",
-                        f"{_to_num(wr['Received %']):.1f}%"
-                    )
-
+                    _cf_card(f"{wr['Wing']} — Received Till Date", _fmt_money(wr["Received Till Date"]), "cf-green", f"{_to_num(wr['Received %']):.1f}%")
                 with c3:
-                    _cf_card(
-                        f"{wr['Wing']} — Due Till Date",
-                        _fmt_money(wr["Due Till Date"]),
-                        "cf-amber",
-                        f"{_to_num(wr['Due %']):.1f}%"
-                    )
-
+                    _cf_card(f"{wr['Wing']} — Due Till Date", _fmt_money(wr["Due Till Date"]), "cf-amber", f"{_to_num(wr['Due %']):.1f}%")
                 with c4:
-                    _cf_card(
-                        f"{wr['Wing']} — Status",
-                        wr["Status"],
-                        "cf-neutral"
-                    )
+                    _cf_card(f"{wr['Wing']} — Status", wr["Status"], "cf-neutral")
 
         st.markdown("<div class='section-subtitle'>🧾 Receipt Punching</div>", unsafe_allow_html=True)
 
@@ -24042,12 +23927,7 @@ with tab16:
                 st.session_state["cashflow_detail_customer"] = form_options[0]
 
             with st.form("cashflow_receipt_form"):
-                form_customer = st.selectbox(
-                    "Select Customer",
-                    options=form_options,
-                    key="cashflow_form_customer"
-                )
-
+                form_customer = st.selectbox("Select Customer", options=form_options, key="cashflow_form_customer")
                 form_amount = st.number_input(
                     "Enter New Received Amount (Gross / slab demand is GST-inclusive)",
                     min_value=0.0,
@@ -24066,14 +23946,12 @@ with tab16:
                         st.error("Please select a customer.")
                     else:
                         sel_idx = form_df.index[form_df["_label_"] == form_customer][0]
-
                         live_booking_df.at[sel_idx, "Received Amount"] = round(
-                            _to_num(live_booking_df.at[sel_idx, "Received Amount"]) + _to_num(form_amount),
-                            2
+                            _to_num(live_booking_df.at[sel_idx, "Received Amount"]) + _to_num(form_amount), 2
                         )
 
                         try:
-                            _write_df_to_sheet(worksheet, live_booking_df)
+                            _write_df_to_sheet(booking_worksheet, live_booking_df)
                             st.session_state["cashflow_detail_customer"] = form_customer
                             st.success("Received Amount updated successfully.")
                             st.rerun()
@@ -24105,73 +23983,28 @@ with tab16:
             detail_sm = _customer_summary(detail_row, live_master_df)
 
             d1, d2, d3, d4 = st.columns(4)
-
             with d1:
-                _cf_card(
-                    "Agreement Cost",
-                    _fmt_money(detail_row.get("Agreement Cost", 0)),
-                    "cf-blue"
-                )
-
+                _cf_card("Agreement Cost", _fmt_money(detail_row.get("Agreement Cost", 0)), "cf-blue")
             with d2:
-                _cf_card(
-                    "Gross Agreement Value",
-                    _fmt_money(detail_sm["gross_value"]),
-                    "cf-blue",
-                    "Agreement Cost + GST"
-                )
-
+                _cf_card("Gross Agreement Value", _fmt_money(detail_sm["gross_value"]), "cf-blue", "Agreement Cost + GST")
             with d3:
-                _cf_card(
-                    "Total Received",
-                    _fmt_money(detail_row.get("Received Amount", 0)),
-                    "cf-green",
-                    f"{detail_sm['received_pct']:.1f}%"
-                )
-
+                _cf_card("Total Received", _fmt_money(detail_row.get("Received Amount", 0)), "cf-green", f"{detail_sm['received_pct']:.1f}%")
             with d4:
-                _cf_card(
-                    "Collection Till Date",
-                    _fmt_money(detail_sm["collection_till_date"]),
-                    "cf-slate",
-                    "Gross slab demand only"
-                )
+                _cf_card("Collection Till Date", _fmt_money(detail_sm["collection_till_date"]), "cf-slate", "Gross slab demand only")
 
             d5, d6, d7, d8 = st.columns(4)
-
             with d5:
-                _cf_card(
-                    "Due Till Date",
-                    _fmt_money(detail_sm["due_till_date"]),
-                    "cf-amber",
-                    f"{detail_sm['due_pct']:.1f}%"
-                )
-
+                _cf_card("Due Till Date", _fmt_money(detail_sm["due_till_date"]), "cf-amber", f"{detail_sm['due_pct']:.1f}%")
             with d6:
                 allocated_total = sum(_to_num(v) for v in detail_sm["alloc_data"]["alloc_map"].values())
-                _cf_card(
-                    "Allocated from Received",
-                    _fmt_money(allocated_total),
-                    "cf-neutral"
-                )
-
+                _cf_card("Allocated from Received", _fmt_money(allocated_total), "cf-neutral")
             with d7:
-                _cf_card(
-                    "GST on Agreement",
-                    _fmt_money(detail_sm["gst_total"]),
-                    "cf-neutral"
-                )
-
+                _cf_card("GST on Agreement", _fmt_money(detail_sm["gst_total"]), "cf-neutral")
             with d8:
                 highest_done_local = _highest_completed_slab(detail_row.get("Wing", ""), live_master_df) or "Booking / Agreement Stage"
-                _cf_card(
-                    "Current Demand Stage",
-                    highest_done_local,
-                    "cf-neutral"
-                )
+                _cf_card("Current Demand Stage", highest_done_local, "cf-neutral")
 
             st.markdown("<div class='section-subtitle'>🧮 Customer Statutory Details</div>", unsafe_allow_html=True)
-
             statutory_df = pd.DataFrame([
                 {
                     "Head": "Stamp Duty",
@@ -24192,11 +24025,9 @@ with tab16:
                     "Pending": detail_sm["customer_total_due_including_statutory"],
                 },
             ])
-
             st.dataframe(statutory_df, use_container_width=True, hide_index=True)
 
             st.markdown("<div class='section-subtitle'>📋 Demand / Allocation Table</div>", unsafe_allow_html=True)
-
             slab_table = _build_customer_slab_table(detail_row, live_master_df)
             st.dataframe(slab_table, use_container_width=True, hide_index=True)
 
@@ -24215,11 +24046,7 @@ with tab16:
                 xOffset=alt.X("Measure:N", sort=["Amount", "Allocated from Received"]),
                 y=alt.Y("Value:Q", title="Amount"),
                 color=alt.Color("Measure:N", sort=["Amount", "Allocated from Received"], title="Measure"),
-                tooltip=[
-                    "Head:N",
-                    "Measure:N",
-                    alt.Tooltip("Value:Q", format=",")
-                ]
+                tooltip=["Head:N", "Measure:N", alt.Tooltip("Value:Q", format=",")]
             )
 
             st.altair_chart(
@@ -24238,19 +24065,17 @@ with tab16:
             )
 
     # ============================================================
-    # SUBTAB 2: CASHFLOW SLAB MASTER
+    # SUBTAB 2: CASHFLOW SLAB MASTER — SUPABASE EDITOR
     # ============================================================
     with cf_subtab2:
         st.markdown("<div class='section-subtitle'>📄 Cashflow Slab Master</div>", unsafe_allow_html=True)
-        st.info("This tab reads and updates slab completion in Supabase table: public.cashflow_slab_master.")
+        st.info("This section reads and updates the Supabase table: cashflow_slab_master.")
 
         if st.button("Refresh Cashflow Slab Master", use_container_width=True):
-            _clear_cashflow_master_cache()
             st.rerun()
 
         fresh_master_df = _refresh_master_df()
         fresh_master_df = _ensure_master_rows(fresh_master_df, live_booking_df)
-        fresh_master_df = _refresh_master_df()
 
         if fresh_master_df.empty:
             st.info("No Cashflow Slab Master data found.")
@@ -24265,108 +24090,109 @@ with tab16:
                 .tolist()
             )
 
-            selected_master_wing = st.selectbox(
-                "Select Wing",
-                wings_available_master,
-                key="cashflow_master_view_wing"
-            )
+            if not wings_available_master:
+                st.info("No wings found in Cashflow Slab Master.")
+            else:
+                selected_master_wing = st.selectbox(
+                    "Select Wing",
+                    wings_available_master,
+                    key="cashflow_master_view_wing"
+                )
 
-            wing_df = fresh_master_df[
-                fresh_master_df["Wing"].astype(str).str.strip().str.upper() == selected_master_wing.strip().upper()
-            ].copy()
+                wing_df = fresh_master_df[
+                    fresh_master_df["Wing"].astype(str).str.strip().str.upper() == selected_master_wing.strip().upper()
+                ].copy()
 
-            completed_count = int(
-                wing_df["Completed"].astype(str).str.strip().str.lower().eq("completed").sum()
-            ) if not wing_df.empty else 0
+                wing_df["_sort"] = wing_df["Slab Name"].apply(
+                    lambda x: CONSTRUCTION_SLABS.index(str(x).strip().upper())
+                    if str(x).strip().upper() in CONSTRUCTION_SLABS else 999
+                )
+                wing_df = wing_df.sort_values("_sort").drop(columns=["_sort"])
 
-            highest_done = _highest_completed_slab(selected_master_wing, fresh_master_df) or "None"
+                completed_count = int(
+                    wing_df["Completed"].astype(str).str.strip().str.lower().eq("completed").sum()
+                ) if not wing_df.empty else 0
 
-            c1, c2 = st.columns(2)
+                highest_done = _highest_completed_slab(selected_master_wing, fresh_master_df) or "None"
 
-            with c1:
-                _cf_card("Completed Slabs", str(completed_count), "cf-neutral")
+                c1, c2 = st.columns(2)
+                with c1:
+                    _cf_card("Completed Slabs", str(completed_count), "cf-neutral")
+                with c2:
+                    _cf_card("Highest Completed Slab", highest_done, "cf-neutral")
 
-            with c2:
-                _cf_card("Highest Completed Slab", highest_done, "cf-neutral")
+                st.markdown("<div class='section-subtitle'>✅ Update Wing Slab Completion</div>", unsafe_allow_html=True)
 
-            st.markdown("<div class='section-subtitle'>✏️ Update Slab Status</div>", unsafe_allow_html=True)
+                with st.form("cashflow_master_update_form"):
+                    update_rows = []
 
-            existing_slabs_for_wing = wing_df["Slab Name"].dropna().astype(str).str.strip().tolist()
-            slab_options = [s for s in CONSTRUCTION_SLABS if s in existing_slabs_for_wing] or CONSTRUCTION_SLABS
+                    for _, r in wing_df.iterrows():
+                        slab_name = _safe_str(r.get("Slab Name", "")).upper()
+                        row_id = r.get("id", "")
+                        existing_completed = _safe_str(r.get("Completed", "")).lower() == "completed"
+                        existing_date = _parse_date_safe(r.get("Completed On", "")) or datetime.date.today()
 
-            with st.form("cashflow_master_update_form"):
-                u1, u2, u3 = st.columns(3)
+                        st.markdown(f"**{slab_name}**")
+                        c1, c2 = st.columns([1, 1])
 
-                with u1:
-                    update_slab = st.selectbox(
-                        "Slab Name",
-                        options=slab_options,
-                        key="cf_master_update_slab"
-                    )
+                        with c1:
+                            completed_bool = st.checkbox(
+                                "Completed",
+                                value=existing_completed,
+                                key=f"cf_master_completed_{selected_master_wing}_{slab_name}"
+                            )
 
-                with u2:
-                    update_status = st.selectbox(
-                        "Completed Status",
-                        options=["Pending", "Completed"],
-                        key="cf_master_update_status"
-                    )
+                        with c2:
+                            completed_on = st.date_input(
+                                "Completed On",
+                                value=existing_date,
+                                key=f"cf_master_date_{selected_master_wing}_{slab_name}",
+                                disabled=not completed_bool
+                            )
 
-                with u3:
-                    update_completed_on = st.date_input(
-                        "Completed On",
-                        value=datetime.date.today(),
-                        format="DD/MM/YYYY",
-                        key="cf_master_update_completed_on"
-                    )
+                        update_rows.append({
+                            "id": row_id,
+                            "wing": selected_master_wing,
+                            "slab_name": slab_name,
+                            "completed": "completed" if completed_bool else "",
+                            "completed_on": completed_on.strftime("%Y-%m-%d") if completed_bool else None,
+                        })
 
-                save_status = st.form_submit_button("Save Slab Status", use_container_width=True)
+                        st.divider()
 
-            if save_status:
-                try:
-                    row_match = fresh_master_df[
-                        (fresh_master_df["Wing"].astype(str).str.strip().str.upper() == selected_master_wing.strip().upper()) &
-                        (fresh_master_df["Slab Name"].astype(str).str.strip().str.upper() == update_slab.strip().upper())
-                    ].copy()
+                    save_master = st.form_submit_button("Save Slab Master Updates", use_container_width=True)
 
-                    completed_value = "Completed" if update_status == "Completed" else ""
-                    completed_on_value = update_completed_on if update_status == "Completed" else None
+                    if save_master:
+                        errors = []
+                        for ur in update_rows:
+                            ok, err = _update_master_row(
+                                row_id=ur["id"],
+                                wing=ur["wing"],
+                                slab_name=ur["slab_name"],
+                                completed=ur["completed"],
+                                completed_on=ur["completed_on"],
+                            )
+                            if not ok:
+                                errors.append(err)
 
-                    if not row_match.empty and int(row_match.iloc[0]["id"]) > 0:
-                        row_id = int(row_match.iloc[0]["id"])
-                        _update_cashflow_master_row(row_id, completed_value, completed_on_value)
-                    else:
-                        _insert_single_cashflow_master_row(
-                            selected_master_wing,
-                            update_slab,
-                            completed_value,
-                            completed_on_value
-                        )
+                        if errors:
+                            st.error("Some rows could not be updated:\n\n- " + "\n- ".join(errors))
+                        else:
+                            st.success("Cashflow Slab Master updated successfully.")
+                            st.rerun()
 
-                    st.success("Cashflow slab status updated successfully.")
-                    st.rerun()
+                st.markdown("<div class='section-subtitle'>📋 Current Wing Status from Supabase</div>", unsafe_allow_html=True)
+                st.dataframe(wing_df, use_container_width=True, hide_index=True)
 
-                except Exception as e:
-                    st.error(f"Could not update cashflow slab status: {e}")
-
-            st.markdown("<div class='section-subtitle'>📋 Current Wing Status from Supabase</div>", unsafe_allow_html=True)
-
-            wing_display = wing_df.copy()
-            st.dataframe(wing_display, use_container_width=True, hide_index=True)
-
-            st.markdown("<div class='section-subtitle'>📋 Full Cashflow Slab Master Table</div>", unsafe_allow_html=True)
-
-            full_display = fresh_master_df.copy()
-            st.dataframe(full_display, use_container_width=True, hide_index=True)
+                st.markdown("<div class='section-subtitle'>📋 Full Cashflow Slab Master Table</div>", unsafe_allow_html=True)
+                st.dataframe(fresh_master_df, use_container_width=True, hide_index=True)
 
     # ============================================================
     # SUBTAB 3: DUE TABLE
     # ============================================================
     with cf_subtab3:
         st.markdown("<div class='section-subtitle'>🏢 Due Table</div>", unsafe_allow_html=True)
-        st.caption(
-            "Flat-wise due view. Booked flats show customer name, due amount, due %, and received %. "
-            "MHADA and Landowner units do not carry any due logic."
-        )
+        st.caption("Flat-wise due view. Booked flats show customer name, due amount, due %, and received %. MHADA and Landowner units do not carry any due logic.")
 
         due_matrix_df = _build_due_matrix_df(live_booking_df, live_master_df)
 
@@ -24381,37 +24207,14 @@ with tab16:
         clear_units_total = int((due_matrix_df["Has Booking"] & (due_matrix_df["Due Amount"] <= 0.5)).sum()) if not due_matrix_df.empty else 0
 
         d1, d2, d3, d4 = st.columns(4)
-
         with d1:
-            _cf_card(
-                "Overall Due",
-                _fmt_money(overall_due_due),
-                "cf-amber",
-                f"{overall_due_pct_due:.1f}%"
-            )
-
+            _cf_card("Overall Due", _fmt_money(overall_due_due), "cf-amber", f"{overall_due_pct_due:.1f}%")
         with d2:
-            _cf_card(
-                "Overall Received",
-                _fmt_money(overall_received_due),
-                "cf-green",
-                f"{overall_received_pct_due:.1f}%"
-            )
-
+            _cf_card("Overall Received", _fmt_money(overall_received_due), "cf-green", f"{overall_received_pct_due:.1f}%")
         with d3:
-            _cf_card(
-                "Booked Units",
-                f"{booked_units_total}",
-                "cf-blue"
-            )
-
+            _cf_card("Booked Units", f"{booked_units_total}", "cf-blue")
         with d4:
-            _cf_card(
-                "Units With Due",
-                f"{due_units_total}",
-                "cf-rose",
-                f"Clear: {clear_units_total}"
-            )
+            _cf_card("Units With Due", f"{due_units_total}", "cf-rose", f"Clear: {clear_units_total}")
 
         if due_matrix_df.empty:
             st.info("No booking data available to build the due table.")
@@ -24430,22 +24233,11 @@ with tab16:
                 )
 
                 wing_due_df = due_matrix_df[due_matrix_df["Wing"] == wing_for_due_details].copy()
-
                 detail_cols = [
-                    "Wing",
-                    "Floor No.",
-                    "Flat Number",
-                    "Type",
-                    "Base Category",
-                    "Customer Name",
-                    "Collection Till Date",
-                    "Received Till Date",
-                    "Due Amount",
-                    "Received %",
-                    "Due %",
-                    "Gross Agreement Value",
-                    "Agreement Cost",
-                    "Due Bucket",
+                    "Wing", "Floor No.", "Flat Number", "Type", "Base Category",
+                    "Customer Name", "Collection Till Date", "Received Till Date",
+                    "Due Amount", "Received %", "Due %", "Gross Agreement Value",
+                    "Agreement Cost", "Due Bucket"
                 ]
 
                 for c in detail_cols:
@@ -24453,12 +24245,11 @@ with tab16:
                         wing_due_df[c] = ""
 
                 wing_due_df = wing_due_df[detail_cols].copy()
-
                 wing_due_df = wing_due_df.rename(columns={
                     "Base Category": "Inventory Category",
                     "Received %": "Received Percentage",
                     "Due %": "Due Percentage",
-                    "Due Bucket": "Cell Status",
+                    "Due Bucket": "Cell Status"
                 })
 
                 st.dataframe(wing_due_df, use_container_width=True, height=460)
