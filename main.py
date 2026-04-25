@@ -9037,4 +9037,547 @@ with tab1:
                 )
         else:
             st.info('Required columns "Wing" and "Merged Units" not found, so Wing-wise Merged chart was skipped.')
+    # ------------------------------------------------------------
+    # TAB_MONTHLY: Monthly Stamp Duty & Agreement Status - SUPABASE COMPATIBLE
+    # ------------------------------------------------------------
+    with TAB_MONTHLY:
+        st.header("🧾 Monthly Stamp Duty & Agreement Status")
     
+        # ------------------------------------------------------------
+        # Local safe helpers
+        # ------------------------------------------------------------
+        def _safe_str_series(series):
+            return series.fillna("").apply(lambda x: str(x).strip())
+    
+        def _norm_status(v):
+            return str(v or "").strip().lower()
+    
+        def _clean_options(series):
+            cleaned = series.dropna().apply(lambda x: str(x).strip())
+            return sorted([
+                x for x in cleaned.unique().tolist()
+                if x and x.upper() not in ("NAN", "NONE", "NULL")
+            ])
+    
+        def _month_sort_key(x):
+            parsed = pd.to_datetime(str(x), format="%B %y", errors="coerce")
+            if pd.isna(parsed):
+                parsed = pd.to_datetime(str(x), errors="coerce")
+            return parsed if pd.notna(parsed) else pd.Timestamp.max
+    
+        # ------------------------------------------------------------
+        # Data prep
+        # ------------------------------------------------------------
+        df_monthly = df.copy()
+    
+        # Ensure old display column names exist from Supabase mapping
+        # Expected mapped names:
+        # month -> MonthYear / Month
+        # sales_executive -> Sales Executive
+        # stamp_duty -> Stamp Duty
+        # agreement_done -> Agreement Done
+        # insider_banker -> Insider Banker
+        # outsider_banker -> Outsider Banker
+    
+        if "MonthYear" not in df_monthly.columns:
+            if "Month" in df_monthly.columns:
+                df_monthly["MonthYear"] = df_monthly["Month"]
+            elif "Date" in df_monthly.columns:
+                df_monthly["Date"] = pd.to_datetime(df_monthly["Date"], errors="coerce", dayfirst=True)
+                df_monthly["MonthYear"] = df_monthly["Date"].dt.strftime("%B %y")
+            else:
+                df_monthly["MonthYear"] = ""
+    
+        if "Month" not in df_monthly.columns:
+            df_monthly["Month"] = df_monthly["MonthYear"]
+    
+        for col in ["Sales Executive", "Stamp Duty", "Agreement Done", "Insider Banker", "Outsider Banker"]:
+            if col not in df_monthly.columns:
+                df_monthly[col] = ""
+    
+        df_monthly["MonthYear"] = _safe_str_series(df_monthly["MonthYear"])
+        df_monthly["Month"] = _safe_str_series(df_monthly["Month"])
+        df_monthly["Sales Executive"] = _safe_str_series(df_monthly["Sales Executive"])
+        df_monthly["Stamp Duty"] = _safe_str_series(df_monthly["Stamp Duty"])
+        df_monthly["Agreement Done"] = _safe_str_series(df_monthly["Agreement Done"])
+        df_monthly["Insider Banker"] = _safe_str_series(df_monthly["Insider Banker"])
+        df_monthly["Outsider Banker"] = _safe_str_series(df_monthly["Outsider Banker"])
+    
+        ordered_months_safe = globals().get("ordered_months", [])
+        if not ordered_months_safe:
+            ordered_months_safe = []
+    
+        # ------------------------------------------------------------
+        # Monthly Stamp Duty & Agreement Status
+        # ------------------------------------------------------------
+        st.markdown(
+            "<div class='section-subtitle'>📅 Monthly Stamp Duty & Agreement Status</div>",
+            unsafe_allow_html=True
+        )
+    
+        valid_months = [
+            m for m in df_monthly["MonthYear"].dropna().unique().tolist()
+            if str(m).strip() and str(m).strip().upper() not in ("NAN", "NONE", "NULL")
+        ]
+    
+        if valid_months and not df_monthly.empty:
+            if ordered_months_safe:
+                month_options = [m for m in ordered_months_safe if m in valid_months]
+                extras = [m for m in valid_months if m not in set(month_options)]
+                extras = sorted(extras, key=_month_sort_key)
+                month_options = month_options + extras
+            else:
+                month_options = sorted(valid_months, key=_month_sort_key)
+    
+            if month_options:
+                selected_month = st.selectbox("Select Month", month_options)
+    
+                monthly_df = df_monthly[df_monthly["MonthYear"] == selected_month].copy()
+    
+                if monthly_df.empty:
+                    st.info("No records for the selected month.")
+                else:
+                    executives_list = _clean_options(df_monthly["Sales Executive"])
+    
+                    # ------------------------------------------------------------
+                    # Table summary
+                    # ------------------------------------------------------------
+                    summary_stats = []
+    
+                    for exec_name in executives_list:
+                        exec_data = monthly_df[monthly_df["Sales Executive"] == exec_name].copy()
+    
+                        stamp_duty_received_cnt = int(
+                            exec_data["Stamp Duty"]
+                            .apply(_norm_status)
+                            .eq("received")
+                            .sum()
+                        )
+    
+                        stamp_duty_pending_cnt = int(len(exec_data) - stamp_duty_received_cnt)
+    
+                        agreement_done_cnt = int(
+                            exec_data["Agreement Done"]
+                            .apply(_norm_status)
+                            .eq("done")
+                            .sum()
+                        )
+    
+                        agreement_pending_cnt = int(len(exec_data) - agreement_done_cnt)
+    
+                        summary_stats.append({
+                            "Sales Executive": exec_name,
+                            "Stamp Duty Received": stamp_duty_received_cnt,
+                            "Stamp Duty Pending": stamp_duty_pending_cnt,
+                            "Agreement Done": agreement_done_cnt,
+                            "Agreement Pending": agreement_pending_cnt
+                        })
+    
+                    monthly_summary_df = pd.DataFrame(summary_stats)
+    
+                    if monthly_summary_df.empty:
+                        st.info("No sales executive records found for the selected month.")
+                    else:
+                        st.markdown(
+                            monthly_summary_df.to_html(index=False, classes="styled-table"),
+                            unsafe_allow_html=True
+                        )
+    
+                        # ------------------------------------------------------------
+                        # Charts
+                        # ------------------------------------------------------------
+                        stats_df = monthly_summary_df.copy()
+    
+                        stats_df["Stamp Duty Total"] = (
+                            stats_df["Stamp Duty Received"] + stats_df["Stamp Duty Pending"]
+                        )
+    
+                        stats_df["Agreement Total"] = (
+                            stats_df["Agreement Done"] + stats_df["Agreement Pending"]
+                        )
+    
+                        # ------------------------------------------------------------
+                        # Stamp Duty Status by Sales Executive
+                        # ------------------------------------------------------------
+                        st.markdown(
+                            "<div class='section-subtitle'>📦 Stamp Duty Status by Sales Executive</div>",
+                            unsafe_allow_html=True
+                        )
+    
+                        stamp_long = stats_df.melt(
+                            id_vars="Sales Executive",
+                            value_vars=[
+                                "Stamp Duty Total",
+                                "Stamp Duty Received",
+                                "Stamp Duty Pending"
+                            ],
+                            var_name="Metric",
+                            value_name="Count"
+                        ).replace({
+                            "Metric": {
+                                "Stamp Duty Total": "Total",
+                                "Stamp Duty Received": "Received",
+                                "Stamp Duty Pending": "Pending"
+                            }
+                        })
+    
+                        stamp_metric_order = ["Total", "Received", "Pending"]
+    
+                        stamp_bar = alt.Chart(stamp_long).mark_bar().encode(
+                            x=alt.X(
+                                "Sales Executive:N",
+                                title="Sales Executive",
+                                axis=alt.Axis(labelAngle=0, labelLimit=160, labelOverlap=True),
+                                scale=alt.Scale(paddingInner=0.35, paddingOuter=0.35)
+                            ),
+                            xOffset=alt.X("Metric:N", sort=stamp_metric_order),
+                            y=alt.Y("Count:Q", title="Units"),
+                            color=alt.Color(
+                                "Metric:N",
+                                scale=alt.Scale(
+                                    domain=stamp_metric_order,
+                                    range=["#6366f1", "#10b981", "#f59e0b"]
+                                ),
+                                legend=alt.Legend(title="", orient="top")
+                            ),
+                            tooltip=["Sales Executive:N", "Metric:N", "Count:Q"]
+                        )
+    
+                        stamp_text = alt.Chart(stamp_long).mark_text(
+                            dy=-6,
+                            fontSize=12,
+                            fontWeight="bold",
+                            color="#0f172a"
+                        ).encode(
+                            x=alt.X("Sales Executive:N"),
+                            xOffset=alt.X("Metric:N", sort=stamp_metric_order),
+                            y="Count:Q",
+                            text="Count:Q"
+                        )
+    
+                        st.altair_chart(
+                            (stamp_bar + stamp_text).properties(
+                                title=alt.TitleParams(
+                                    "Stamp Duty Status by Sales Executive",
+                                    anchor="start",
+                                    fontSize=16,
+                                    fontWeight="bold",
+                                    dy=-5
+                                ),
+                                height=340,
+                                width=alt.Step(80)
+                            ).configure_title(anchor="start"),
+                            use_container_width=True
+                        )
+    
+                        # ------------------------------------------------------------
+                        # Agreement Status by Sales Executive
+                        # ------------------------------------------------------------
+                        st.markdown(
+                            "<div class='section-subtitle'>📝 Agreement Status by Sales Executive</div>",
+                            unsafe_allow_html=True
+                        )
+    
+                        agree_long = stats_df.melt(
+                            id_vars="Sales Executive",
+                            value_vars=[
+                                "Agreement Total",
+                                "Agreement Done",
+                                "Agreement Pending"
+                            ],
+                            var_name="Metric",
+                            value_name="Count"
+                        ).replace({
+                            "Metric": {
+                                "Agreement Total": "Total",
+                                "Agreement Done": "Done",
+                                "Agreement Pending": "Pending"
+                            }
+                        })
+    
+                        agree_metric_order = ["Total", "Done", "Pending"]
+    
+                        agree_bar = alt.Chart(agree_long).mark_bar().encode(
+                            x=alt.X(
+                                "Sales Executive:N",
+                                title="Sales Executive",
+                                axis=alt.Axis(labelAngle=0, labelLimit=160, labelOverlap=True),
+                                scale=alt.Scale(paddingInner=0.35, paddingOuter=0.35)
+                            ),
+                            xOffset=alt.X("Metric:N", sort=agree_metric_order),
+                            y=alt.Y("Count:Q", title="Units"),
+                            color=alt.Color(
+                                "Metric:N",
+                                scale=alt.Scale(
+                                    domain=agree_metric_order,
+                                    range=["#6366f1", "#10b981", "#f59e0b"]
+                                ),
+                                legend=alt.Legend(title="", orient="top")
+                            ),
+                            tooltip=["Sales Executive:N", "Metric:N", "Count:Q"]
+                        )
+    
+                        agree_text = alt.Chart(agree_long).mark_text(
+                            dy=-6,
+                            fontSize=12,
+                            fontWeight="bold",
+                            color="#0f172a"
+                        ).encode(
+                            x=alt.X("Sales Executive:N"),
+                            xOffset=alt.X("Metric:N", sort=agree_metric_order),
+                            y="Count:Q",
+                            text="Count:Q"
+                        )
+    
+                        st.altair_chart(
+                            (agree_bar + agree_text).properties(
+                                title=alt.TitleParams(
+                                    "Agreement Status by Sales Executive",
+                                    anchor="start",
+                                    fontSize=16,
+                                    fontWeight="bold",
+                                    dy=-5
+                                ),
+                                height=340,
+                                width=alt.Step(80)
+                            ).configure_title(anchor="start"),
+                            use_container_width=True
+                        )
+            else:
+                st.info("No valid months available for selection.")
+        else:
+            st.warning("Month data is missing or empty.")
+    
+        # ------------------------------------------------------------
+        # Overall Funding Source chart
+        # ------------------------------------------------------------
+        st.markdown(
+            "<div class='section-subtitle'>🏦 Funding Source by Sales Executive — Overall</div>",
+            unsafe_allow_html=True
+        )
+    
+        req_cols = ["Sales Executive", "Insider Banker", "Outsider Banker"]
+        missing_funding_cols = [c for c in req_cols if c not in df_monthly.columns]
+    
+        if missing_funding_cols:
+            st.warning(f"Missing columns for funding chart: {', '.join(missing_funding_cols)}")
+        else:
+            def _funding_overall(row):
+                ib = _norm_status(row.get("Insider Banker", ""))
+                ob = _norm_status(row.get("Outsider Banker", ""))
+    
+                if ib == "yes":
+                    return "Insider Banker"
+                elif ob == "yes":
+                    return "Outsider Banker"
+                else:
+                    return "Self Funded"
+    
+            fdf_all = df_monthly.copy()
+            fdf_all["Sales Executive"] = _safe_str_series(fdf_all["Sales Executive"])
+            fdf_all = fdf_all[fdf_all["Sales Executive"].ne("")]
+    
+            if fdf_all.empty:
+                st.info("No Sales Executive entries to chart funding.")
+            else:
+                fdf_all["Funding"] = fdf_all.apply(_funding_overall, axis=1)
+    
+                FUNDING_DOMAIN = ["Insider Banker", "Outsider Banker", "Self Funded"]
+    
+                funding_counts_all = (
+                    fdf_all.groupby(["Sales Executive", "Funding"])
+                    .size()
+                    .reset_index(name="Count")
+                )
+    
+                funding_counts_all["Funding"] = pd.Categorical(
+                    funding_counts_all["Funding"],
+                    categories=FUNDING_DOMAIN,
+                    ordered=True
+                )
+    
+                base = alt.Chart(funding_counts_all)
+    
+                bars = base.mark_bar(size=16).encode(
+                    x=alt.X(
+                        "Sales Executive:N",
+                        title="Sales Executive",
+                        axis=alt.Axis(labelAngle=0, labelLimit=160, labelOverlap=True),
+                        scale=alt.Scale(paddingInner=0.35, paddingOuter=0.35)
+                    ),
+                    xOffset=alt.X("Funding:N", sort=FUNDING_DOMAIN, title=None),
+                    y=alt.Y("Count:Q", title="Bookings"),
+                    color=alt.Color(
+                        "Funding:N",
+                        scale=alt.Scale(
+                            domain=FUNDING_DOMAIN,
+                            range=["#2563eb", "#f59e0b", "#10b981"]
+                        ),
+                        legend=alt.Legend(title="Funding")
+                    ),
+                    tooltip=[
+                        alt.Tooltip("Sales Executive:N", title="Sales Executive"),
+                        alt.Tooltip("Funding:N"),
+                        alt.Tooltip("Count:Q", title="Count")
+                    ]
+                )
+    
+                labels = base.mark_text(
+                    dy=-6,
+                    fontSize=12,
+                    fontWeight="bold",
+                    color="#0f172a"
+                ).encode(
+                    x=alt.X(
+                        "Sales Executive:N",
+                        axis=alt.Axis(labelAngle=0, labelLimit=160, labelOverlap=True)
+                    ),
+                    xOffset=alt.X("Funding:N", sort=FUNDING_DOMAIN),
+                    y="Count:Q",
+                    text="Count:Q"
+                )
+    
+                st.altair_chart(
+                    (bars + labels).properties(
+                        title=alt.TitleParams(
+                            "Funding Source by Sales Executive — Overall",
+                            anchor="start",
+                            fontSize=16,
+                            fontWeight="bold",
+                            dy=-5
+                        ),
+                        height=340,
+                        width=alt.Step(80)
+                    ).configure_title(anchor="start"),
+                    use_container_width=True
+                )
+    
+        # ------------------------------------------------------------
+        # Monthwise: Bookings vs Stamp Duty Received vs Agreement Done
+        # ------------------------------------------------------------
+        st.markdown(
+            "<div class='section-subtitle'>📊 Monthwise: Bookings, Stamp Duty Received, Agreement Done</div>",
+            unsafe_allow_html=True
+        )
+    
+        needed_cols = {"MonthYear", "Stamp Duty", "Agreement Done"}
+    
+        if not needed_cols.issubset(df_monthly.columns):
+            st.info("Missing columns for monthwise combined graph. Need MonthYear, Stamp Duty, Agreement Done.")
+        else:
+            month_values = [
+                m for m in df_monthly["MonthYear"].dropna().unique().tolist()
+                if str(m).strip() and str(m).strip().upper() not in ("NAN", "NONE", "NULL")
+            ]
+    
+            if ordered_months_safe:
+                month_order_local = [m for m in ordered_months_safe if m in month_values]
+                extras = [m for m in month_values if m not in set(month_order_local)]
+                extras = sorted(extras, key=_month_sort_key)
+                month_order_local = month_order_local + extras
+            else:
+                month_order_local = sorted(month_values, key=_month_sort_key)
+    
+            if not month_order_local:
+                st.info("No valid month data available for monthwise combined graph.")
+            else:
+                dfx = df_monthly.dropna(subset=["MonthYear"]).copy()
+                dfx = dfx[dfx["MonthYear"].astype(str).str.strip().ne("")]
+    
+                dfx["MonthYear"] = pd.Categorical(
+                    dfx["MonthYear"],
+                    categories=month_order_local,
+                    ordered=True
+                )
+    
+                grp = dfx.groupby("MonthYear", observed=True)
+    
+                month_bookings = (
+                    grp.size()
+                    .rename("Bookings")
+                    .reset_index()
+                )
+    
+                month_sd = (
+                    grp["Stamp Duty"]
+                    .apply(lambda s: int(s.apply(_norm_status).eq("received").sum()))
+                    .rename("Stamp Duty Received")
+                    .reset_index()
+                )
+    
+                month_ag = (
+                    grp["Agreement Done"]
+                    .apply(lambda s: int(s.apply(_norm_status).eq("done").sum()))
+                    .rename("Agreement Done")
+                    .reset_index()
+                )
+    
+                m_all = (
+                    month_bookings
+                    .merge(month_sd, on="MonthYear", how="outer")
+                    .merge(month_ag, on="MonthYear", how="outer")
+                )
+    
+                num_cols = ["Bookings", "Stamp Duty Received", "Agreement Done"]
+    
+                for c in num_cols:
+                    m_all[c] = pd.to_numeric(m_all[c], errors="coerce").fillna(0).astype(int)
+    
+                m_long = m_all.melt(
+                    id_vars="MonthYear",
+                    value_vars=num_cols,
+                    var_name="Metric",
+                    value_name="Count"
+                )
+    
+                metric_order = ["Bookings", "Stamp Duty Received", "Agreement Done"]
+    
+                base = alt.Chart(m_long)
+    
+                bars = base.mark_bar().encode(
+                    x=alt.X(
+                        "MonthYear:N",
+                        sort=month_order_local,
+                        title="Month",
+                        axis=alt.Axis(labelAngle=0, labelLimit=180, labelOverlap=True),
+                        scale=alt.Scale(paddingInner=0.35, paddingOuter=0.35)
+                    ),
+                    xOffset=alt.X("Metric:N", sort=metric_order),
+                    y=alt.Y("Count:Q", title="Count"),
+                    color=alt.Color(
+                        "Metric:N",
+                        scale=alt.Scale(
+                            domain=metric_order,
+                            range=["#6366f1", "#10b981", "#f59e0b"]
+                        ),
+                        legend=alt.Legend(title="", orient="top")
+                    ),
+                    tooltip=["MonthYear:N", "Metric:N", "Count:Q"]
+                )
+    
+                labels = base.mark_text(
+                    dy=-6,
+                    fontSize=12,
+                    fontWeight="bold",
+                    color="#0f172a"
+                ).encode(
+                    x=alt.X("MonthYear:N", sort=month_order_local),
+                    xOffset=alt.X("Metric:N", sort=metric_order),
+                    y="Count:Q",
+                    text="Count:Q"
+                )
+    
+                st.altair_chart(
+                    (bars + labels).properties(
+                        title=alt.TitleParams(
+                            "Monthwise: Bookings vs Stamp Duty Received vs Agreement Done",
+                            anchor="start",
+                            fontSize=16,
+                            fontWeight="bold",
+                            dy=-5
+                        ),
+                        height=340,
+                        width=alt.Step(90)
+                    ).configure_title(anchor="start"),
+                    use_container_width=True
+                )
