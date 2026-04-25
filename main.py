@@ -9524,13 +9524,9 @@ with tab3:
 
     def clean_text(v):
         v = "" if v is None else str(v).strip()
-        return None if v == "" else v
+        return "" if v == "" else v
 
-    def clean_num(v):
-        if v is None or v == "":
-            return None
-        return v
-
+    # ---- session defaults ----
     st.session_state.setdefault("inputs_locked", False)
     st.session_state.setdefault("calculated", False)
     st.session_state.setdefault("booking_selected_rate", None)
@@ -9547,17 +9543,52 @@ with tab3:
     st.session_state.setdefault("visit_count", "")
 
     location_options = [
-        "", "Dhayari", "Dhayari Gaon", "Dhayari Phata", "Chavan Baug", "Benkar Nagar",
-        "Ganesh Nagar (Dhayari)", "Shree Nagar (Dhayari)", "Raykar Mala", "Garmal",
-        "Morya Nagar (Dhayari)", "Saikrupa Nagar", "Siddharth Nagar (Dhayari side)",
-        "Laxmi Nagar (Dhayari)", "Nanded", "Nanded Gaon", "Nanded Fata", "Nanded City",
-        "Deshmukh Nagar", "Pandurang Industrial Area", "Vadgaon Budruk",
-        "Santosh Nagar (Vadgaon)", "Kirloskar Colony", "Anand Nagar (Sinhagad Road)",
-        "Manik Baug", "Suncity", "Narhe", "Narhe Gaon", "Khadewadi", "Kirkatwadi",
-        "Kirkatwadi Gaon", "Kolhewadi", "Donje", "Donje Gaon", "Mukai Nagar",
-        "Shivane", "Uttam Nagar", "Warje", "Warje Malwadi", "Ram Nagar (Warje)",
-        "Gokul Nagar (Warje)", "Hingne Budruk", "Hingne Khurd", "Karve Nagar",
-        "Kothrud", "Swargate"
+        "",
+        "Dhayari",
+        "Dhayari Gaon",
+        "Dhayari Phata",
+        "Chavan Baug",
+        "Benkar Nagar",
+        "Ganesh Nagar (Dhayari)",
+        "Shree Nagar (Dhayari)",
+        "Raykar Mala",
+        "Garmal",
+        "Morya Nagar (Dhayari)",
+        "Saikrupa Nagar",
+        "Siddharth Nagar (Dhayari side)",
+        "Laxmi Nagar (Dhayari)",
+        "Nanded",
+        "Nanded Gaon",
+        "Nanded Fata",
+        "Nanded City",
+        "Deshmukh Nagar",
+        "Pandurang Industrial Area",
+        "Vadgaon Budruk",
+        "Santosh Nagar (Vadgaon)",
+        "Kirloskar Colony",
+        "Anand Nagar (Sinhagad Road)",
+        "Manik Baug",
+        "Suncity",
+        "Narhe",
+        "Narhe Gaon",
+        "Khadewadi",
+        "Kirkatwadi",
+        "Kirkatwadi Gaon",
+        "Kolhewadi",
+        "Donje",
+        "Donje Gaon",
+        "Mukai Nagar",
+        "Shivane",
+        "Uttam Nagar",
+        "Warje",
+        "Warje Malwadi",
+        "Ram Nagar (Warje)",
+        "Gokul Nagar (Warje)",
+        "Hingne Budruk",
+        "Hingne Khurd",
+        "Karve Nagar",
+        "Kothrud",
+        "Swargate"
     ]
 
     def _ensure_parking_keys():
@@ -9575,7 +9606,9 @@ with tab3:
 
     def _has_at_least_one_parking():
         for p in st.session_state.get("parkings", []):
-            if (p.get("type") or "").strip() and (p.get("number") or "").strip():
+            p_type = (p.get("type") or "").strip()
+            p_num = (p.get("number") or "").strip()
+            if p_type and p_num:
                 return True
         return False
 
@@ -9609,42 +9642,108 @@ with tab3:
         with st.container(border=True):
             st.subheader("🗓️ Dates", divider="gray")
             c1, c2, c3 = st.columns(3)
+
             with c1:
-                st.date_input("Date of Booking *", format="DD/MM/YYYY", key="booking_date", disabled=st.session_state.inputs_locked)
+                st.date_input(
+                    "Date of Booking *",
+                    format="DD/MM/YYYY",
+                    key="booking_date",
+                    disabled=st.session_state.inputs_locked
+                )
+
             with c2:
-                st.date_input("Date of First Visit *", format="DD/MM/YYYY", key="first_visit_date", disabled=st.session_state.inputs_locked)
+                st.date_input(
+                    "Date of First Visit *",
+                    format="DD/MM/YYYY",
+                    key="first_visit_date",
+                    disabled=st.session_state.inputs_locked
+                )
+
             with c3:
-                st.selectbox("Visit Count *", options=visit_count_options, format_func=_visit_label, key="visit_count", disabled=st.session_state.inputs_locked)
+                st.selectbox(
+                    "Visit Count *",
+                    options=visit_count_options,
+                    format_func=_visit_label,
+                    key="visit_count",
+                    disabled=st.session_state.inputs_locked
+                )
 
         st.divider()
 
         with st.container(border=True):
             st.subheader("👤 Basic Details", divider="gray")
             b1, b2, b3 = st.columns(3)
+
             with b1:
-                st.text_input("Customer Name *", key="cust_name", placeholder="e.g., Rohan Sharma", disabled=st.session_state.inputs_locked)
+                st.text_input(
+                    "Customer Name *",
+                    key="cust_name",
+                    placeholder="e.g., Rohan Sharma",
+                    disabled=st.session_state.inputs_locked
+                )
+
             with b2:
-                st.selectbox("Wing *", ["E", "F", "C"], key="wing", disabled=st.session_state.inputs_locked)
+                st.selectbox(
+                    "Wing *",
+                    ["E", "F", "C"],
+                    key="wing",
+                    disabled=st.session_state.inputs_locked
+                )
+
             with b3:
-                st.selectbox("Floor *", list(range(1, 14)), key="floor", disabled=st.session_state.inputs_locked)
+                st.selectbox(
+                    "Floor *",
+                    list(range(1, 14)),
+                    key="floor",
+                    disabled=st.session_state.inputs_locked
+                )
 
             u1, u2 = st.columns(2)
+
             with u1:
-                st.text_input("Flat Number *", key="flat_number", placeholder="e.g., 1004", disabled=st.session_state.inputs_locked)
+                st.text_input(
+                    "Flat Number *",
+                    key="flat_number",
+                    placeholder="e.g., 1004",
+                    disabled=st.session_state.inputs_locked
+                )
+
             with u2:
-                st.selectbox("Type *", ["1BHK", "2BHK"], key="unit_type", disabled=st.session_state.inputs_locked)
+                st.selectbox(
+                    "Type *",
+                    ["1BHK", "2BHK"],
+                    key="unit_type",
+                    disabled=st.session_state.inputs_locked
+                )
 
             l1, l2 = st.columns(2)
+
             with l1:
-                st.selectbox("Location *", options=location_options, key="location", disabled=st.session_state.inputs_locked)
+                st.selectbox(
+                    "Location *",
+                    options=location_options,
+                    key="location",
+                    disabled=st.session_state.inputs_locked
+                )
+
             with l2:
-                st.selectbox("Merged Units", options=["", "1+1", "2+1", "2+2"], key="merged_units", disabled=st.session_state.inputs_locked)
+                st.selectbox(
+                    "Merged Units",
+                    options=["", "1+1", "2+1", "2+2"],
+                    key="merged_units",
+                    disabled=st.session_state.inputs_locked
+                )
 
         st.divider()
 
         with st.container(border=True):
             st.subheader("📐 Carpet Area", divider="gray")
-            st.selectbox("Booking: Carpet Area *", options=all_carpets, key="booking_carpet_area_main", disabled=st.session_state.inputs_locked)
+            st.selectbox(
+                "Booking: Carpet Area *",
+                options=all_carpets,
+                key="booking_carpet_area_main",
+                disabled=st.session_state.inputs_locked
+            )
 
         st.divider()
 
@@ -9656,7 +9755,11 @@ with tab3:
 
             add_row_cols = st.columns([3, 1])
             with add_row_cols[1]:
-                add_parking_clicked = st.form_submit_button("➕ Add", use_container_width=True, disabled=st.session_state.inputs_locked)
+                add_parking_clicked = st.form_submit_button(
+                    "➕ Add",
+                    use_container_width=True,
+                    disabled=st.session_state.inputs_locked
+                )
 
             if add_parking_clicked:
                 _sync_parkings_from_keys()
@@ -9665,44 +9768,105 @@ with tab3:
 
             for i in range(len(st.session_state.parkings)):
                 r1, r2 = st.columns([1, 1])
+
                 with r1:
-                    st.selectbox(f"Parking Type {i+1}", parking_types, key=f"parking_type_{i}", disabled=st.session_state.inputs_locked)
+                    st.selectbox(
+                        f"Parking Type {i+1}",
+                        parking_types,
+                        key=f"parking_type_{i}",
+                        disabled=st.session_state.inputs_locked
+                    )
+
                 with r2:
-                    st.text_input(f"Parking Number {i+1} *", key=f"parking_number_{i}", placeholder="e.g., 121 or 121A", disabled=st.session_state.inputs_locked)
+                    st.text_input(
+                        f"Parking Number {i+1} *",
+                        key=f"parking_number_{i}",
+                        placeholder="e.g., 121 or 121A",
+                        disabled=st.session_state.inputs_locked
+                    )
 
         st.divider()
 
         with st.container(border=True):
             st.subheader("💰 Commercials", divider="gray")
             m1, m2 = st.columns([1, 1])
+
             with m1:
-                st.number_input("Final Price (in Lakhs) *", value=0.0, key="final_price_lakhs", disabled=st.session_state.inputs_locked)
+                st.number_input(
+                    "Final Price (in Lakhs) *",
+                    value=st.session_state.get("final_price_lakhs")
+                    if st.session_state.get("final_price_lakhs") is not None else 0.0,
+                    key="final_price_lakhs",
+                    disabled=st.session_state.inputs_locked
+                )
+
             with m2:
-                st.selectbox("Stamp Duty (for calc only) *", options=[6, 7], format_func=lambda x: f"{x}%", key="stamp_duty_percent", disabled=st.session_state.inputs_locked)
+                st.selectbox(
+                    "Stamp Duty (for calc only) *",
+                    options=[6, 7],
+                    format_func=lambda x: f"{x}%",
+                    key="stamp_duty_percent",
+                    disabled=st.session_state.inputs_locked
+                )
 
         st.divider()
 
         with st.container(border=True):
             st.subheader("🎁 Offers & Remarks", divider="gray")
             o1, o2 = st.columns(2)
-            with o1:
-                st.selectbox("Offer 1", offer_options, key="offer_1", format_func=offer_label, disabled=st.session_state.inputs_locked)
-            with o2:
-                st.selectbox("Offer 2", offer_options, key="offer_2", format_func=offer_label, disabled=st.session_state.inputs_locked)
 
-            st.text_input("Civil Changes (if any)", key="civil_changes", disabled=st.session_state.inputs_locked)
+            with o1:
+                st.selectbox(
+                    "Offer 1",
+                    offer_options,
+                    key="offer_1",
+                    format_func=offer_label,
+                    disabled=st.session_state.inputs_locked
+                )
+
+            with o2:
+                st.selectbox(
+                    "Offer 2",
+                    offer_options,
+                    key="offer_2",
+                    format_func=offer_label,
+                    disabled=st.session_state.inputs_locked
+                )
+
+            st.text_input(
+                "Civil Changes (if any)",
+                key="civil_changes",
+                placeholder="e.g., Kitchen platform shift, extra electrical points",
+                disabled=st.session_state.inputs_locked
+            )
 
         st.divider()
 
         with st.container(border=True):
             st.subheader("👥 Lead & Executive", divider="gray")
             le1, le2 = st.columns(2)
-            with le1:
-                st.selectbox("Lead Type *", ["Direct", "CP", "Digital", "Referral", "Hoarding"], key="lead_type", disabled=st.session_state.inputs_locked)
-            with le2:
-                st.selectbox("Sales Executive *", ["Komal K", "Tejas P", "Ashutosh S", "Sailee D"], key="sales_exec", disabled=st.session_state.inputs_locked)
 
-        lock_clicked = st.form_submit_button("🔒 Lock Inputs & Calculate", use_container_width=True, disabled=st.session_state.inputs_locked)
+            with le1:
+                st.selectbox(
+                    "Lead Type *",
+                    ["Direct", "CP", "Digital", "Referral", "Hoarding"],
+                    key="lead_type",
+                    disabled=st.session_state.inputs_locked
+                )
+
+            with le2:
+                st.selectbox(
+                    "Sales Executive *",
+                    ["Komal K", "Tejas P", "Ashutosh S", "Sailee D"],
+                    key="sales_exec",
+                    disabled=st.session_state.inputs_locked
+                )
+
+        lock_clicked = st.form_submit_button(
+            "🔒 Lock Inputs & Calculate",
+            use_container_width=True,
+            disabled=st.session_state.inputs_locked
+        )
 
     if lock_clicked:
         _sync_parkings_from_keys()
@@ -9712,7 +9876,7 @@ with tab3:
             st.error("❌ Please fill both dates.")
             valid = False
 
-        if st.session_state.get("visit_count") == "":
+        if st.session_state.get("visit_count") == "" or st.session_state.get("visit_count") is None:
             st.error("❌ Visit Count is compulsory.")
             valid = False
 
@@ -9757,6 +9921,7 @@ with tab3:
 
             gst_percent = 1 if total_package <= 4889999 else 5
             stamp = st.session_state.stamp_duty_percent
+
             booking_divisor = 1 + ((stamp + gst_percent) / 100)
 
             agreement_cost = round(booking_adjusted_cost / booking_divisor)
@@ -9766,21 +9931,61 @@ with tab3:
             st.session_state.agreement_cost = agreement_cost
             st.session_state.inputs_locked = True
             st.session_state.calculated = True
+
             st.success("Inputs locked and calculation done. You can now submit booking.")
 
     if st.session_state.get("first_visit_date") and st.session_state.get("booking_date"):
         conversion_days = (st.session_state.booking_date - st.session_state.first_visit_date).days
         if conversion_days >= 0:
             st.info(f"🕒 Conversion Period: {conversion_days} days")
+        else:
+            st.warning("⚠️ First Visit Date is after Date of Booking.")
 
-    st.text_input("Rate Per Sqft (Auto)", value=st.session_state.get("booking_selected_rate"), disabled=True)
-    st.text_input("Agreement Cost (Auto)", value=st.session_state.get("agreement_cost"), disabled=True)
+    st.text_input(
+        "Rate Per Sqft (Auto)",
+        value=st.session_state.get("booking_selected_rate"),
+        disabled=True
+    )
+
+    st.text_input(
+        "Agreement Cost (Auto)",
+        value=st.session_state.get("agreement_cost"),
+        disabled=True
+    )
 
     can_submit = st.session_state.inputs_locked and st.session_state.calculated
 
     if st.button("✅ Submit Booking", disabled=not can_submit):
         try:
             _sync_parkings_from_keys()
+
+            if not st.session_state.get("booking_date") or not st.session_state.get("first_visit_date"):
+                st.error("❌ Both dates are compulsory.")
+                st.stop()
+
+            if st.session_state.get("visit_count") == "" or st.session_state.get("visit_count") is None:
+                st.error("❌ Visit Count is compulsory.")
+                st.stop()
+
+            if not (st.session_state.get("cust_name") or "").strip():
+                st.error("❌ Customer Name is compulsory.")
+                st.stop()
+
+            if not (st.session_state.get("flat_number") or "").strip():
+                st.error("❌ Flat Number is compulsory.")
+                st.stop()
+
+            if not (st.session_state.get("location") or "").strip():
+                st.error("❌ Location is compulsory.")
+                st.stop()
+
+            if st.session_state.get("booking_carpet_area_main") is None:
+                st.error("❌ Carpet Area is compulsory.")
+                st.stop()
+
+            if not _has_at_least_one_parking():
+                st.error("❌ Parking is compulsory.")
+                st.stop()
 
             _days_gap = (st.session_state.booking_date - st.session_state.first_visit_date).days
             if _days_gap < 0:
@@ -9795,6 +10000,7 @@ with tab3:
                     parking_parts.append(f"{p_type}-{p_num}")
 
             parking_string = " , ".join(parking_parts)
+
             month_label = st.session_state.booking_date.strftime("%B %y").upper()
             agreement_cost = st.session_state.agreement_cost
 
@@ -9832,17 +10038,16 @@ with tab3:
                 "offer_1": clean_text(st.session_state.get("offer_1")),
                 "offer_2": clean_text(st.session_state.get("offer_2")),
 
-                "offer_1_rewarded": False,
-                "offer_2_rewarded": False,
-                "referral_given": False,
-
-                "stamp_duty": None,
-                "agreement_done": False,
-                "incentive": None,
-                "rcc": None,
-                "possession_handover": False,
-                "insider_banker": None,
-                "outsider_banker": None,
+                "offer_1_rewarded": "",
+                "offer_2_rewarded": "",
+                "referral_given": "",
+                "stamp_duty": "",
+                "agreement_done": "",
+                "incentive": "",
+                "rcc": "",
+                "possession_handover": "",
+                "insider_banker": "",
+                "outsider_banker": "",
 
                 "carpet_area": float(st.session_state.booking_carpet_area_main),
 
@@ -9874,7 +10079,7 @@ with tab3:
 
             supabase.table("bookings").insert(booking_row).execute()
 
-            st.success("🎉 Booking submitted successfully to Supabase!")
+            st.success("🎉 Booking submitted successfully!")
 
             st.session_state.calculated = False
             st.session_state.inputs_locked = False
@@ -9891,8 +10096,6 @@ with tab3:
 
             st.session_state.parkings = [{"type": "Stilt", "number": ""}]
             _ensure_parking_keys()
-
-            st.rerun()
 
         except Exception as e:
             st.error(f"❌ Error submitting to Supabase: {e}")
