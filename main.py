@@ -2342,14 +2342,13 @@ with tab1:
     # ==========================================================
     # CREATE SUB-TABS INSIDE TAB 1
     # ==========================================================
-    TAB_BOOKING, TAB_AGREEMENT, TAB_INVENTORY, TAB_MONTHLY, TAB_OFFERS_DASH, TAB_SE_PERFORMANCE, TAB_PROJECTED = st.tabs([
+    TAB_BOOKING, TAB_AGREEMENT, TAB_INVENTORY, TAB_MONTHLY, TAB_OFFERS_DASH, TAB_SE_PERFORMANCE = st.tabs([
         "Booking Dashboard",
         "Agreement Dashboard",
         "Inventory Dashboard",
         "Monthly Stamp Duty & Agreement Status",
         "Offers Dashboard",
         "Sales Performance Command Center",
-        "Projected Sales Dashboard",
     ])
     # ------------------------------------------------------------
     # TAB 1: Booking Dashboard
