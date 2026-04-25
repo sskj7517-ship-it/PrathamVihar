@@ -348,67 +348,46 @@ def get_custom_quarter_label(date):
     else:
         return f"January-March {year}"
 
-# --- Custom Quarter Function ---
-def get_custom_quarter_label(date):
-    year = date.year
-    if date.month in [4, 5, 6]:
-        return f"April-June {year}"
-    elif date.month in [7, 8, 9]:
-        return f"July-September {year}"
-    elif date.month in [10, 11, 12]:
-        return f"October-December {year}"
-    else:
-        return f"January-March {year}"
+# ---------------- TAB 5: AGREEMENT DONE TRACKER - SUPABASE ----------------
+
+BOOKINGS_TABLE = "bookings"
 
 
-# ---------------- SUPABASE HELPERS ----------------
-
-def fetch_all_bookings():
+def get_bookings_df():
     """
-    Fetch all records from Supabase bookings table.
-    Uses pagination so it works even if rows are more than 1000.
+    Uses already-loaded Supabase data from load_all_data().
+    Falls back to direct Supabase fetch if booking_df is empty.
     """
-    all_rows = []
-    page_size = 1000
-    start = 0
+    global booking_df
 
-    while True:
-        response = (
-            supabase
-            .table("bookings")
-            .select("*")
-            .order("id", desc=False)
-            .range(start, start + page_size - 1)
-            .execute()
-        )
+    if "booking_df" in globals() and booking_df is not None and not booking_df.empty:
+        return booking_df.copy()
 
-        batch = response.data or []
-        all_rows.extend(batch)
+    response = (
+        supabase
+        .table(BOOKINGS_TABLE)
+        .select("*")
+        .order("id", desc=False)
+        .execute()
+    )
 
-        if len(batch) < page_size:
-            break
-
-        start += page_size
-
-    return pd.DataFrame(all_rows)
+    return pd.DataFrame(response.data or [])
 
 
 def update_booking_status(booking_id, updates):
     """
-    Update one booking row in Supabase using primary key id.
+    Updates one row in public.bookings using primary key id.
     """
     if not updates:
         return None
 
-    response = (
+    return (
         supabase
-        .table("bookings")
+        .table(BOOKINGS_TABLE)
         .update(updates)
         .eq("id", int(booking_id))
         .execute()
     )
-
-    return response
 
 
 with tab5:
@@ -417,6 +396,7 @@ with tab5:
     # ---- Keep state across reruns ----
     if "tab5_filters_active" not in st.session_state:
         st.session_state.tab5_filters_active = False
+
     if "tab5_customer" not in st.session_state:
         st.session_state.tab5_customer = "ALL"
 
@@ -452,19 +432,21 @@ with tab5:
     def _tab5_reset_filters():
         st.session_state.tab5_filters_active = False
         st.session_state.tab5_customer = "ALL"
+
         for k, v in defaults.items():
             st.session_state[k] = v
 
-    # 🔒 Guard for Supabase connection
-    if "supabase" not in globals() or supabase is None:
+    # Guard for Supabase connection
+    if not supabase_connected:
         st.warning("🗄️ Please connect to Supabase to use this feature.")
 
     else:
-        # --- Load fresh data from Supabase ---
-        df = fetch_all_bookings()
+        # --- Load data from Supabase dataframe ---
+        df = get_bookings_df()
 
         if df.empty:
             st.warning("No data available in Supabase table.")
+
         else:
             # Required Supabase columns
             required_cols = [
@@ -493,17 +475,21 @@ with tab5:
 
             if missing:
                 st.error(
-                    f"Missing required columns in Supabase table `bookings`: "
+                    f"Missing required columns in Supabase table `{BOOKINGS_TABLE}`: "
                     f"{', '.join(missing)}"
                 )
 
             else:
-                # Derived column, not written back to Supabase
+                # Derived display column, not saved to Supabase
                 df["flat_address"] = (
                     df["wing"].fillna("").astype(str).str.strip()
                     + " "
                     + df["flat_number"].fillna("").astype(str).str.strip()
                 ).str.strip()
+
+                # Helper for normalizing status text
+                def _norm(s):
+                    return str(s or "").strip().lower()
 
                 # Helper for dropdown labels
                 def make_label(row):
@@ -520,16 +506,18 @@ with tab5:
                 pre_wing = st.session_state.get("tab5_wing", "ALL")
 
                 if pre_month != "ALL":
-                    base_preview = base_preview[base_preview["month"] == pre_month]
+                    base_preview = base_preview[
+                        base_preview["month"].astype(str) == str(pre_month)
+                    ]
 
                 if pre_exec != "ALL":
                     base_preview = base_preview[
-                        base_preview["sales_executive"].astype(str) == pre_exec
+                        base_preview["sales_executive"].astype(str) == str(pre_exec)
                     ]
 
                 if pre_wing != "ALL":
                     base_preview = base_preview[
-                        base_preview["wing"].astype(str).str.strip() == pre_wing
+                        base_preview["wing"].astype(str).str.strip() == str(pre_wing)
                     ]
 
                 label_map_preview = {
@@ -551,9 +539,14 @@ with tab5:
 
                     # Month fixed filter
                     month_values = sorted(
-                        df["month"].dropna().astype(str).unique(),
-                        reverse=True
+                        df["month"]
+                        .dropna()
+                        .astype(str)
+                        .replace("None", "")
+                        .unique(),
+                        reverse=True,
                     )
+                    month_values = [m for m in month_values if m.strip() != ""]
                     month_options = ["ALL"] + list(month_values)
 
                     st.selectbox(
@@ -563,10 +556,15 @@ with tab5:
                         help="Always applied. Choose ALL to include all months.",
                     )
 
-                    # Sales executive fixed filter
+                    # Sales Executive fixed filter
                     exec_values = sorted(
-                        df["sales_executive"].dropna().astype(str).unique()
+                        df["sales_executive"]
+                        .dropna()
+                        .astype(str)
+                        .replace("None", "")
+                        .unique()
                     )
+                    exec_values = [e for e in exec_values if e.strip() != ""]
                     exec_options = ["ALL"] + list(exec_values)
 
                     st.selectbox(
@@ -582,6 +580,7 @@ with tab5:
                         .dropna()
                         .astype(str)
                         .str.strip()
+                        .replace("None", "")
                         .unique()
                         .tolist()
                     )
@@ -621,7 +620,7 @@ with tab5:
                         key="tab5_filter_field",
                     )
 
-                    # Render chosen variable filter's control
+                    # Render chosen variable filter control
                     ff = st.session_state.tab5_filter_field
 
                     if ff == "Customer":
@@ -633,7 +632,10 @@ with tab5:
                         )
 
                     elif ff == "Flat Address (contains)":
-                        st.text_input("Address contains…", key="tab5_addr_contains")
+                        st.text_input(
+                            "Address contains…",
+                            key="tab5_addr_contains",
+                        )
 
                     elif ff == "Customer Name (contains)":
                         st.text_input(
@@ -712,26 +714,25 @@ with tab5:
                     )
 
                 else:
-                    _norm = lambda s: str(s or "").strip().lower()
-
                     # Start with base fixed filters
                     post_df = df.copy()
 
                     if st.session_state.tab5_month != "ALL":
                         post_df = post_df[
-                            post_df["month"] == st.session_state.tab5_month
+                            post_df["month"].astype(str)
+                            == str(st.session_state.tab5_month)
                         ]
 
                     if st.session_state.tab5_exec != "ALL":
                         post_df = post_df[
                             post_df["sales_executive"].astype(str)
-                            == st.session_state.tab5_exec
+                            == str(st.session_state.tab5_exec)
                         ]
 
                     if st.session_state.tab5_wing != "ALL":
                         post_df = post_df[
                             post_df["wing"].astype(str).str.strip()
-                            == st.session_state.tab5_wing
+                            == str(st.session_state.tab5_wing)
                         ]
 
                     # Apply exactly ONE additional filter
@@ -741,15 +742,18 @@ with tab5:
                         label_map = {
                             idx: make_label(r) for idx, r in post_df.iterrows()
                         }
+
                         chosen = [
                             i
                             for i, lab in label_map.items()
                             if lab == st.session_state.tab5_customer
                         ]
+
                         post_df = post_df.loc[chosen]
 
                     elif ff == "Flat Address (contains)":
                         q = st.session_state.tab5_addr_contains.strip().lower()
+
                         if q:
                             post_df = post_df[
                                 post_df["flat_address"]
@@ -760,6 +764,7 @@ with tab5:
 
                     elif ff == "Customer Name (contains)":
                         q = st.session_state.tab5_name_contains.strip().lower()
+
                         if q:
                             post_df = post_df[
                                 post_df["customer_name"]
@@ -772,6 +777,7 @@ with tab5:
                         want_received = (
                             st.session_state.tab5_stamp_choice == "Received"
                         )
+
                         post_df = post_df[
                             post_df["stamp_duty"].apply(
                                 lambda v: _norm(v) == "received"
@@ -781,6 +787,7 @@ with tab5:
 
                     elif ff == "Agreement Done":
                         want_done = st.session_state.tab5_agree_choice == "Done"
+
                         post_df = post_df[
                             post_df["agreement_done"].apply(
                                 lambda v: _norm(v) == "done"
@@ -792,6 +799,7 @@ with tab5:
                         want_given = (
                             st.session_state.tab5_incentive_choice == "Given"
                         )
+
                         post_df = post_df[
                             post_df["incentive"].apply(
                                 lambda v: _norm(v) == "given"
@@ -801,6 +809,7 @@ with tab5:
 
                     elif ff == "Insider Banker":
                         want_yes = st.session_state.tab5_insider_choice == "Yes"
+
                         post_df = post_df[
                             post_df["insider_banker"].apply(
                                 lambda v: _norm(v) == "yes"
@@ -810,6 +819,7 @@ with tab5:
 
                     elif ff == "Outsider Banker":
                         want_yes = st.session_state.tab5_outsider_choice == "Yes"
+
                         post_df = post_df[
                             post_df["outsider_banker"].apply(
                                 lambda v: _norm(v) == "yes"
@@ -822,13 +832,19 @@ with tab5:
 
                         if choice == "Has Offer":
                             post_df = post_df[
-                                post_df["offer_1"].fillna("").astype(str).str.strip()
+                                post_df["offer_1"]
+                                .fillna("")
+                                .astype(str)
+                                .str.strip()
                                 != ""
                             ]
 
                         elif choice == "No Offer":
                             post_df = post_df[
-                                post_df["offer_1"].fillna("").astype(str).str.strip()
+                                post_df["offer_1"]
+                                .fillna("")
+                                .astype(str)
+                                .str.strip()
                                 == ""
                             ]
 
@@ -836,7 +852,14 @@ with tab5:
                             post_df = post_df[
                                 post_df["offer_1_rewarded"].apply(
                                     lambda x: _norm(x)
-                                    in ("rewarded 1", "true", "yes", "1", "y", "✓")
+                                    in (
+                                        "rewarded 1",
+                                        "true",
+                                        "yes",
+                                        "1",
+                                        "y",
+                                        "✓",
+                                    )
                                 )
                             ]
 
@@ -844,7 +867,14 @@ with tab5:
                             post_df = post_df[
                                 ~post_df["offer_1_rewarded"].apply(
                                     lambda x: _norm(x)
-                                    in ("rewarded 1", "true", "yes", "1", "y", "✓")
+                                    in (
+                                        "rewarded 1",
+                                        "true",
+                                        "yes",
+                                        "1",
+                                        "y",
+                                        "✓",
+                                    )
                                 )
                             ]
 
@@ -853,13 +883,19 @@ with tab5:
 
                         if choice == "Has Offer":
                             post_df = post_df[
-                                post_df["offer_2"].fillna("").astype(str).str.strip()
+                                post_df["offer_2"]
+                                .fillna("")
+                                .astype(str)
+                                .str.strip()
                                 != ""
                             ]
 
                         elif choice == "No Offer":
                             post_df = post_df[
-                                post_df["offer_2"].fillna("").astype(str).str.strip()
+                                post_df["offer_2"]
+                                .fillna("")
+                                .astype(str)
+                                .str.strip()
                                 == ""
                             ]
 
@@ -867,7 +903,14 @@ with tab5:
                             post_df = post_df[
                                 post_df["offer_2_rewarded"].apply(
                                     lambda x: _norm(x)
-                                    in ("rewarded 2", "true", "yes", "1", "y", "✓")
+                                    in (
+                                        "rewarded 2",
+                                        "true",
+                                        "yes",
+                                        "1",
+                                        "y",
+                                        "✓",
+                                    )
                                 )
                             ]
 
@@ -875,11 +918,18 @@ with tab5:
                             post_df = post_df[
                                 ~post_df["offer_2_rewarded"].apply(
                                     lambda x: _norm(x)
-                                    in ("rewarded 2", "true", "yes", "1", "y", "✓")
+                                    in (
+                                        "rewarded 2",
+                                        "true",
+                                        "yes",
+                                        "1",
+                                        "y",
+                                        "✓",
+                                    )
                                 )
                             ]
 
-                    # UI header
+                    # UI header labels
                     month_label = (
                         st.session_state.tab5_month
                         if st.session_state.tab5_month != "ALL"
@@ -902,22 +952,31 @@ with tab5:
 
                     if extra == "Customer":
                         extra += f" = {st.session_state.tab5_customer}"
+
                     elif extra == "Flat Address (contains)":
                         extra += f" '{st.session_state.tab5_addr_contains}'"
+
                     elif extra == "Customer Name (contains)":
                         extra += f" '{st.session_state.tab5_name_contains}'"
+
                     elif extra == "Stamp Duty":
                         extra += f" = {st.session_state.tab5_stamp_choice}"
+
                     elif extra == "Agreement Done":
                         extra += f" = {st.session_state.tab5_agree_choice}"
+
                     elif extra == "Incentive":
                         extra += f" = {st.session_state.tab5_incentive_choice}"
+
                     elif extra == "Insider Banker":
                         extra += f" = {st.session_state.tab5_insider_choice}"
+
                     elif extra == "Outsider Banker":
                         extra += f" = {st.session_state.tab5_outsider_choice}"
+
                     elif extra == "Offer 1 (Has/Rewarded)":
                         extra += f" = {st.session_state.tab5_o1_choice}"
+
                     elif extra == "Offer 2 (Has/Rewarded)":
                         extra += f" = {st.session_state.tab5_o2_choice}"
 
@@ -952,18 +1011,24 @@ with tab5:
                         for idx, row in post_df.iterrows():
                             booking_id = row.get("id")
 
+                            if pd.isna(booking_id):
+                                continue
+
                             flat_addr = row.get("flat_address", "")
                             cust_name = row.get("customer_name", "")
 
                             is_agreement_done = (
                                 _norm(row.get("agreement_done", "")) == "done"
                             )
+
                             is_stamp_received = (
                                 _norm(row.get("stamp_duty", "")) == "received"
                             )
+
                             is_incentive_given = (
                                 _norm(row.get("incentive", "")) == "given"
                             )
+
                             is_referral_given = (
                                 _norm(row.get("referral_given", "")) == "given"
                             )
@@ -971,6 +1036,7 @@ with tab5:
                             is_rcc_completed = (
                                 _norm(row.get("rcc", "")) == "completed"
                             )
+
                             is_poss_handover = (
                                 _norm(row.get("possession_handover", ""))
                                 == "handover"
@@ -979,9 +1045,11 @@ with tab5:
                             is_referral_lead = (
                                 _norm(row.get("lead_type", "")) == "referral"
                             )
+
                             is_insider = (
                                 _norm(row.get("insider_banker", "")) == "yes"
                             )
+
                             is_outsider = (
                                 _norm(row.get("outsider_banker", "")) == "yes"
                             )
@@ -1061,7 +1129,7 @@ with tab5:
                                 key=f"tab5_pos_{booking_id}",
                             )
 
-                            # Referral
+                            # Referral checkbox only for referral leads
                             if is_referral_lead:
                                 referral_checked = col7.checkbox(
                                     "Given",
@@ -1084,7 +1152,7 @@ with tab5:
                                 key=f"tab5_outsider_{booking_id}",
                             )
 
-                            # Offers
+                            # Offer 1
                             if has_offer1:
                                 o1_checked = col10.checkbox(
                                     offer1_text,
@@ -1098,6 +1166,7 @@ with tab5:
                                 col10.write("—")
                                 o1_checked = is_o1_rewarded
 
+                            # Offer 2
                             if has_offer2:
                                 o2_checked = col11.checkbox(
                                     offer2_text,
@@ -1114,8 +1183,8 @@ with tab5:
                             # Collect updates for this row
                             updates = {}
 
-                            # Same logic as your Google Sheet version:
-                            # These statuses are only set when checked.
+                            # Same logic as Google Sheets version:
+                            # These statuses are set when checked.
                             # Unchecking does not reverse them.
                             if stamp_checked and row.get("stamp_duty") != "Received":
                                 updates["stamp_duty"] = "Received"
@@ -1176,21 +1245,27 @@ with tab5:
 
                             # Push row update to Supabase
                             if updates:
-                                update_booking_status(booking_id, updates)
-                                updated_any = True
+                                try:
+                                    update_booking_status(booking_id, updates)
+                                    updated_any = True
 
-                                if "agreement_done" in updates:
-                                    st.balloons()
-                                    st.markdown(
-                                        f"""
-                                        <div style='text-align: center; padding: 40px 0;'>
-                                            <h1 style='font-size: 60px;'>🎉 CONGRATULATIONS 🎉</h1>
-                                            <h2 style='font-size: 40px;'>Agreement Done for
-                                                <span style='color: #1f77b4;'>{cust_name}</span>
-                                            </h2>
-                                        </div>
-                                        """,
-                                        unsafe_allow_html=True,
+                                    if "agreement_done" in updates:
+                                        st.balloons()
+                                        st.markdown(
+                                            f"""
+                                            <div style='text-align: center; padding: 40px 0;'>
+                                                <h1 style='font-size: 60px;'>🎉 CONGRATULATIONS 🎉</h1>
+                                                <h2 style='font-size: 40px;'>Agreement Done for
+                                                    <span style='color: #1f77b4;'>{cust_name}</span>
+                                                </h2>
+                                            </div>
+                                            """,
+                                            unsafe_allow_html=True,
+                                        )
+
+                                except Exception as e:
+                                    st.error(
+                                        f"❌ Failed to update booking ID {booking_id}: {str(e)}"
                                     )
 
                         if updated_any:
