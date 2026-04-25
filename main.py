@@ -5884,7 +5884,7 @@ with tab1:
                 df_mu[MERGED_COL] = df_mu[MERGED_COL].astype(str).str.strip()
                 df_mu = df_mu[df_mu[MERGED_COL].isin(MERGED_DOMAIN)]
         
-                wing_domain = WINGS if "WINGS" in globals() else sorted(df_mu["Wing"].unique())
+                wing_domain = WINGS if "WINGS" in locals() else sorted(df_mu["Wing"].unique())
         
                 rows_mu = []
                 for w in wing_domain:
