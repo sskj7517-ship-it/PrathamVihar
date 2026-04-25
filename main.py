@@ -7463,4 +7463,479 @@ with tab1:
                     st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
     
         st.markdown("</div>", unsafe_allow_html=True)
+    with TAB_PROJECTED:
+            import datetime as dt
+            import math
+            import pandas as pd
+            import altair as alt
+            import streamlit as st
+        
+            st.subheader("📌 Projected Sales Dashboard (FY Apr–Mar)")
+        
+            # ----------------------------
+            # CONFIG (as per your requirement)
+            # ----------------------------
+            TOTAL_FLATS_TARGET = 588
+            PROJECT_START = dt.date(2025, 4, 1)             # Project starts 1 Apr 2025
+            PROJECT_END   = dt.date(2028, 3, 31)            # 3 FY years ending 31 Mar 2028
+        
+            GOOD_DAY_WEIGHT   = 1.25
+            NORMAL_DAY_WEIGHT = 1.00
+            BAD_DAY_WEIGHT    = 0.00
+        
+            # ----------------------------
+            # UI: Colored KPI Cards
+            # ----------------------------
+            st.markdown(
+                """
+                <style>
+                .psd-card{
+                    padding:18px;
+                    border-radius:14px;
+                    text-align:center;
+                    box-shadow:0 2px 8px rgba(0,0,0,0.08);
+                    margin:8px 0;
+                    border:1px solid #e5e7eb;
+                }
+                .psd-title{font-size:13px;font-weight:700;color:#111827;margin-bottom:6px;}
+                .psd-value{font-size:26px;font-weight:900;color:#111827;line-height:1.1;}
+                .psd-blue{background:#eff6ff;border-color:#93c5fd;}
+                .psd-green{background:#ecfdf5;border-color:#6ee7b7;}
+                .psd-red{background:#fef2f2;border-color:#fca5a5;}
+                .psd-amber{background:#fffbeb;border-color:#fcd34d;}
+                .psd-gray{background:#ffffff;border-color:#e5e7eb;}
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+        
+            def psd_kpi(title: str, value, theme: str = "psd-gray"):
+                st.markdown(
+                    f"""
+                    <div class="psd-card {theme}">
+                        <div class="psd-title">{title}</div>
+                        <div class="psd-value">{value}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+        
+            # ----------------------------
+            # Helpers: dates / months / FY / quarters
+            # ----------------------------
+            def month_start(d: dt.date) -> dt.date:
+                return dt.date(d.year, d.month, 1)
+        
+            def add_months(d: dt.date, months: int) -> dt.date:
+                y = d.year + (d.month - 1 + months) // 12
+                m = (d.month - 1 + months) % 12 + 1
+                return dt.date(y, m, 1)
+        
+            def month_end(d: dt.date) -> dt.date:
+                return add_months(month_start(d), 1) - dt.timedelta(days=1)
+        
+            def iter_days(start: dt.date, end: dt.date):
+                cur = start
+                while cur <= end:
+                    yield cur
+                    cur += dt.timedelta(days=1)
+        
+            def fy_start(d: dt.date) -> dt.date:
+                # FY starts on Apr 1
+                return dt.date(d.year if d.month >= 4 else d.year - 1, 4, 1)
+        
+            def fy_label(fy_s: dt.date) -> str:
+                # "APR 25 - MAR 26"
+                return f"APR {str(fy_s.year)[-2:]} - MAR {str(fy_s.year + 1)[-2:]}"
+        
+            def quarter_start(d: dt.date) -> dt.date:
+                # FY quarters: Q1 Apr-Jun, Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar
+                if 4 <= d.month <= 6:
+                    return dt.date(d.year, 4, 1)
+                if 7 <= d.month <= 9:
+                    return dt.date(d.year, 7, 1)
+                if 10 <= d.month <= 12:
+                    return dt.date(d.year, 10, 1)
+                return dt.date(d.year, 1, 1)
+        
+            def quarter_num(qs: dt.date) -> int:
+                return {4: 1, 7: 2, 10: 3, 1: 4}[qs.month]
+        
+            def quarter_end(qs: dt.date) -> dt.date:
+                return add_months(qs, 3) - dt.timedelta(days=1)
+        
+            def quarter_label(qs: dt.date) -> str:
+                qe = quarter_end(qs)
+                qn = quarter_num(qs)
+                return f"Q{qn} {qs.strftime('%b %y').upper()} - {qe.strftime('%b %y').upper()}"
+        
+            # ----------------------------
+            # Build day-type map from good_bad_df (Auspicious sheet) if available
+            # - Uses previous-year same-date fallback for future years
+            # ----------------------------
+            gb = globals().get("good_bad_df", None)
+        
+            def _pick_type_col(df_in: pd.DataFrame):
+                if df_in is None or df_in.empty:
+                    return None
+                candidates = [
+                    "Type", "type", "DayType", "Day Type", "CATEGORY", "Category",
+                    "Status", "GOOD/BAD", "Good/Bad", "GoodBad", "Nature"
+                ]
+                for c in candidates:
+                    if c in df_in.columns:
+                        return c
+                # fallback: first non-Date column
+                for c in df_in.columns:
+                    if c != "Date":
+                        return c
+                return None
+        
+            def _normalize_day_type(x: object) -> str:
+                s = str(x).strip().upper()
+                if "HOLIDAY" in s:
+                    return "HOLIDAY"
+                if "BAD" in s:
+                    return "BAD"
+                if "FEST" in s:
+                    return "FESTIVAL"
+                if "GOOD" in s:
+                    return "GOOD"
+                if "NEUT" in s:
+                    return "NEUTRAL"
+                # common short forms
+                if s in {"H", "HD"}:
+                    return "HOLIDAY"
+                if s in {"B"}:
+                    return "BAD"
+                if s in {"G"}:
+                    return "GOOD"
+                return "NEUTRAL"
+        
+            # priority: BAD/HOLIDAY overrides GOOD/FESTIVAL
+            _priority = {"NEUTRAL": 1, "GOOD": 2, "FESTIVAL": 2, "BAD": 3, "HOLIDAY": 3}
+        
+            day_type_by_date = {}
+            if gb is not None and isinstance(gb, pd.DataFrame) and (not gb.empty) and ("Date" in gb.columns):
+                gb2 = gb.copy()
+                gb2["Date"] = pd.to_datetime(gb2["Date"], errors="coerce")
+                gb2 = gb2.dropna(subset=["Date"])
+                tcol = _pick_type_col(gb2)
+        
+                if tcol is not None:
+                    for _, r in gb2.iterrows():
+                        d = r["Date"].date()
+                        t = _normalize_day_type(r[tcol])
+                        if d not in day_type_by_date or _priority[t] > _priority[day_type_by_date[d]]:
+                            day_type_by_date[d] = t
+        
+            def day_type_for(d: dt.date) -> str:
+                # exact date
+                if d in day_type_by_date:
+                    return day_type_by_date[d]
+                # previous-year fallback (so FY 26-27 uses FY 25-26 pattern)
+                for back in (1, 2, 3):
+                    try:
+                        d2 = dt.date(d.year - back, d.month, d.day)
+                    except ValueError:
+                        continue
+                    if d2 in day_type_by_date:
+                        return day_type_by_date[d2]
+                return "NEUTRAL"
+        
+            def day_weight(d: dt.date) -> float:
+                t = day_type_for(d)
+                if t in ("BAD", "HOLIDAY"):
+                    return BAD_DAY_WEIGHT
+                if t in ("GOOD", "FESTIVAL"):
+                    return GOOD_DAY_WEIGHT
+                return NORMAL_DAY_WEIGHT
+        
+            # ----------------------------
+            # Booking data (df is your Booking sheet df already in Tab1)
+            # ----------------------------
+            if df is None or df.empty or ("Date" not in df.columns):
+                st.warning("Booking data not available (missing df or Date column).")
+            else:
+                today = dt.date.today()
+                effective_today = max(today, PROJECT_START)
+                if today > PROJECT_END:
+                    st.info("Project period is over (today is after project end).")
+        
+                dfb = df.copy()
+                dfb["Date"] = pd.to_datetime(dfb["Date"], errors="coerce")
+                dfb = dfb.dropna(subset=["Date"])
+                dfb["DateOnly"] = dfb["Date"].dt.date
+        
+                # Achieved bookings only inside project window up to today
+                dfb_proj = dfb[
+                    (dfb["DateOnly"] >= PROJECT_START)
+                    & (dfb["DateOnly"] <= min(today, PROJECT_END))
+                ].copy()
+        
+                dfb_proj["MonthStart"] = dfb_proj["Date"].dt.to_period("M").dt.to_timestamp().dt.date
+                achieved_by_month = dfb_proj.groupby("MonthStart").size().to_dict()
+        
+                total_booked = int(len(dfb_proj))
+                remaining_flats = max(0, TOTAL_FLATS_TARGET - total_booked)
+        
+                # average monthly bookings so far (used for realistic multiplier)
+                months_with_data = sorted(achieved_by_month.keys())
+                avg_monthly_bookings = (total_booked / len(months_with_data)) if months_with_data else (TOTAL_FLATS_TARGET / 36.0)
+        
+                def clamp(x: float, lo: float, hi: float) -> float:
+                    return max(lo, min(hi, x))
+        
+                # ----------------------------
+                # Build all project months (Apr 2025 ... Mar 2028) and compute weights
+                # ----------------------------
+                project_months = []
+                cur_ms = month_start(PROJECT_START)
+                end_ms = month_start(PROJECT_END)
+        
+                while cur_ms <= end_ms:
+                    full_ms = cur_ms
+                    full_me = month_end(full_ms)
+        
+                    # clamp month range to project window
+                    rng_start = max(full_ms, PROJECT_START)
+                    rng_end = min(full_me, PROJECT_END)
+        
+                    # day weights from Good/Bad/Festival (or neutral if not present)
+                    w = 0.0
+                    for d in iter_days(rng_start, rng_end):
+                        w += day_weight(d)
+        
+                    # previous-year same month bookings multiplier (Mar 2027 uses Mar 2026)
+                    prev_year_ms = dt.date(full_ms.year - 1, full_ms.month, 1)
+                    prev_year_count = achieved_by_month.get(prev_year_ms, None)
+                    if prev_year_count is None:
+                        booking_factor = 1.0
+                    else:
+                        booking_factor = (prev_year_count + 1.0) / (avg_monthly_bookings + 1.0)
+                        booking_factor = clamp(booking_factor, 0.80, 1.20)  # keep realistic
+        
+                    eff_w = max(0.01, w * booking_factor)
+        
+                    project_months.append(
+                        {
+                            "MonthStart": full_ms,
+                            "MonthEnd": full_me,
+                            "Weight": w,
+                            "BookingFactor": booking_factor,
+                            "EffWeight": eff_w,
+                        }
+                    )
+                    cur_ms = add_months(cur_ms, 1)
+        
+                # ----------------------------
+                # Allocate monthly targets across ALL 36 months so SUM = 588
+                # ----------------------------
+                total_eff = sum(m["EffWeight"] for m in project_months)
+                if total_eff <= 0:
+                    # fallback: equal distribution
+                    float_targets = [TOTAL_FLATS_TARGET / len(project_months)] * len(project_months)
+                else:
+                    float_targets = [(m["EffWeight"] / total_eff) * TOTAL_FLATS_TARGET for m in project_months]
+        
+                floors = [int(math.floor(x)) for x in float_targets]
+                rem = TOTAL_FLATS_TARGET - sum(floors)
+        
+                fracs = sorted(
+                    [(float_targets[i] - floors[i], i) for i in range(len(project_months))],
+                    reverse=True
+                )
+                for k in range(rem):
+                    floors[fracs[k][1]] += 1
+        
+                target_by_month = {project_months[i]["MonthStart"]: int(floors[i]) for i in range(len(project_months))}
+        
+                # ----------------------------
+                # Current month KPIs
+                # ----------------------------
+                this_month_ms = month_start(effective_today)
+                this_month_me = month_end(this_month_ms)
+        
+                # targets / achieved for this month
+                this_month_target = int(target_by_month.get(this_month_ms, 0))
+                achieved_this_month = int(achieved_by_month.get(this_month_ms, 0))
+                gap_this_month = this_month_target - achieved_this_month
+        
+                # selling days left (this month)
+                selling_days_left_this_month = 0
+                for d in iter_days(max(effective_today, this_month_ms), min(this_month_me, PROJECT_END)):
+                    if day_weight(d) > 0:
+                        selling_days_left_this_month += 1
+        
+                # selling days left (project)
+                selling_days_left_project = 0
+                for d in iter_days(effective_today, PROJECT_END):
+                    if day_weight(d) > 0:
+                        selling_days_left_project += 1
+        
+                # needed per selling day (this month)
+                need_this_month = max(0, gap_this_month)
+                needed_per_selling_day = (need_this_month / selling_days_left_this_month) if selling_days_left_this_month > 0 else 0.0
+        
+                # Good/Bad counts this month (based on available good_bad_df + fallback)
+                bad_days_this_month = 0
+                good_days_this_month = 0
+                for d in iter_days(this_month_ms, min(this_month_me, PROJECT_END)):
+                    t = day_type_for(d)
+                    if t in ("BAD", "HOLIDAY"):
+                        bad_days_this_month += 1
+                    elif t in ("GOOD", "FESTIVAL"):
+                        good_days_this_month += 1
+        
+                project_ends_in_days = max(0, (PROJECT_END - today).days)
+        
+                # ----------------------------
+                # KPI rows (colored)
+                # ----------------------------
+                r1 = st.columns(3)
+                with r1[0]: psd_kpi("Flats Target (3 Years)", TOTAL_FLATS_TARGET, "psd-blue")
+                with r1[1]: psd_kpi("Total Bookings (From 1 Apr 2025)", total_booked, "psd-green")
+                with r1[2]: psd_kpi("Remaining Flats", remaining_flats, "psd-red")
+        
+                r2 = st.columns(3)
+                with r2[0]: psd_kpi("This Month Target", this_month_target, "psd-blue")
+                with r2[1]: psd_kpi("Achieved (This Month)", achieved_this_month, "psd-green")
+                with r2[2]:
+                    theme = "psd-green" if gap_this_month <= 0 else "psd-red"
+                    psd_kpi("Gap (Target - Achieved)", gap_this_month, theme)
+        
+                r3 = st.columns(3)
+                with r3[0]: psd_kpi("Selling Days Left (Project)", selling_days_left_project, "psd-gray")
+                with r3[1]: psd_kpi("Selling Days Left (This Month)", selling_days_left_this_month, "psd-gray")
+                with r3[2]: psd_kpi("Needed / Selling Day (This Month)", f"{needed_per_selling_day:.1f}", "psd-amber")
+        
+                r4 = st.columns(3)
+                with r4[0]: psd_kpi("Bad Days (This Month)", bad_days_this_month, "psd-red")
+                with r4[1]: psd_kpi("Good/Festival Days (This Month)", good_days_this_month, "psd-green")
+                with r4[2]: psd_kpi("Project Ends In (Days)", project_ends_in_days, "psd-gray")
+        
+                # ----------------------------
+                # Current quarter + next 2 quarters
+                # ----------------------------
+                st.markdown("### 🗓️ Current Quarter + Next 2 Quarters (FY Quarters)")
+                q0 = quarter_start(effective_today)
+        
+                q_cols = st.columns(3)
+                for i in range(3):
+                    qs = add_months(q0, 3 * i)
+                    qe = quarter_end(qs)
+        
+                    # quarter target = sum of month targets inside quarter
+                    q_target = 0
+                    cur = month_start(qs)
+                    while cur <= month_start(qe):
+                        q_target += int(target_by_month.get(cur, 0))
+                        cur = add_months(cur, 1)
+        
+                    # achieved in quarter (up to today, inside project)
+                    if qs > today:
+                        q_ach = 0
+                    else:
+                        q_ach = int(
+                            dfb_proj[
+                                (dfb_proj["DateOnly"] >= max(qs, PROJECT_START))
+                                & (dfb_proj["DateOnly"] <= min(today, qe, PROJECT_END))
+                            ].shape[0]
+                        )
+        
+                    with q_cols[i]:
+                        st.markdown(
+                            f"""
+                            <div class="psd-card psd-gray">
+                                <div class="psd-title">{quarter_label(qs)}</div>
+                                <div class="psd-value">{q_ach} / {q_target}</div>
+                                <div style="font-size:12px;color:#6b7280;margin-top:4px;">Achieved / Target</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+        
+                # ----------------------------
+                # FY targets: current FY + next 2 FY (Apr–Mar)
+                # ----------------------------
+                st.markdown("### 📅 Yearly Targets (FY Apr–Mar)")
+                fy0 = fy_start(effective_today)
+        
+                fy_cols = st.columns(3)
+                for i in range(3):
+                    fys = dt.date(fy0.year + i, 4, 1)
+                    fye = dt.date(fy0.year + i + 1, 3, 31)
+        
+                    # FY target = sum of month targets inside FY
+                    fy_target = 0
+                    cur = month_start(fys)
+                    while cur <= month_start(fye):
+                        # only count months inside the project window
+                        if PROJECT_START <= cur <= PROJECT_END:
+                            fy_target += int(target_by_month.get(cur, 0))
+                        cur = add_months(cur, 1)
+        
+                    # Achieved in FY (up to today)
+                    if fys > today:
+                        fy_ach = 0
+                    else:
+                        fy_ach = int(
+                            dfb_proj[
+                                (dfb_proj["DateOnly"] >= max(fys, PROJECT_START))
+                                & (dfb_proj["DateOnly"] <= min(today, fye, PROJECT_END))
+                            ].shape[0]
+                        )
+        
+                    with fy_cols[i]:
+                        st.markdown(
+                            f"""
+                            <div class="psd-card psd-gray">
+                                <div class="psd-title">{fy_label(fys)}</div>
+                                <div class="psd-value">{fy_ach} / {fy_target}</div>
+                                <div style="font-size:12px;color:#6b7280;margin-top:4px;">Achieved / Target</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+        
+                # ----------------------------
+                # 6-month projection chart (chronological)
+                # ----------------------------
+                st.markdown("### 📈 6‑Month Projection (Targets)")
+        
+                next6 = []
+                cur = month_start(effective_today)
+                for i in range(6):
+                    ms = add_months(cur, i)
+                    if ms > PROJECT_END:
+                        break
+                    next6.append(
+                        {
+                            "MonthStart": pd.to_datetime(ms),
+                            "Month": ms.strftime("%b %y").upper(),
+                            "Target": int(target_by_month.get(ms, 0)),
+                        }
+                    )
+        
+                if next6:
+                    proj_df = pd.DataFrame(next6)
+        
+                    line = (
+                        alt.Chart(proj_df)
+                        .mark_line(point=True, strokeDash=[4, 4])
+                        .encode(
+                            x=alt.X("MonthStart:T", title="Month", axis=alt.Axis(format="%b %y")),
+                            y=alt.Y("Target:Q", title="Units"),
+                            tooltip=["Month:N", "Target:Q"],
+                        )
+                    )
+                    labels = (
+                        alt.Chart(proj_df)
+                        .mark_text(dy=-10)
+                        .encode(x="MonthStart:T", y="Target:Q", text="Target:Q")
+                    )
+        
+                    st.altair_chart(line + labels, use_container_width=True)
+                else:
+                    st.info("No upcoming months available inside project window.")
     
