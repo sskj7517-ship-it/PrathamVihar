@@ -25298,7 +25298,7 @@ with tab14:
         )
 
         st.altair_chart(bar + labels, use_container_width=True)
- with tab15:
+with tab15:
     import re
     import io
     import ssl
