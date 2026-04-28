@@ -1,73 +1,103 @@
-import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
+import streamlit as st
+from supabase import create_client
 
-SUPABASE_URL = "https://wfyzspnfijrfwuhmlzka.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndmeXpzcG5maWpyZnd1aG1semthIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxMDA2NDksImV4cCI6MjA5MjY3NjY0OX0.kbMDhr3sBW9sGuHCDpBEYqbF7kSA-Dcf8WiX_5MuyuY"
+_SUPABASE_CLIENT = None
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def load_table(table_name: str) -> pd.DataFrame:
+TABLES = {
+    "bookings": "bookings",
+    "marketing": "marketing_expenditure",
+    "holds": "holds",
+    "cp_payout": "cp_payout_tracker",
+    "daily_visits": "daily_visits",
+    "cashflow_slab_master": "cashflow_slab_master",
+}
+
+
+def set_supabase_client(client):
+    global _SUPABASE_CLIENT
+    _SUPABASE_CLIENT = client
+
+
+def _get_client():
+    global _SUPABASE_CLIENT
+
+    if _SUPABASE_CLIENT is not None:
+        return _SUPABASE_CLIENT
+
+    url = st.secrets["SUPABASE_URL"]
+    anon_key = st.secrets["SUPABASE_ANON_KEY"]
+    _SUPABASE_CLIENT = create_client(url, anon_key)
+    return _SUPABASE_CLIENT
+
+
+def _select_all(table_name: str, order_col: str = "id") -> list[dict]:
+    sb = _get_client()
+
+    rows = []
+    page_size = 1000
+    start = 0
+
+    while True:
+        query = sb.table(table_name).select("*")
+
+        if order_col:
+            try:
+                query = query.order(order_col)
+            except Exception:
+                pass
+
+        res = query.range(start, start + page_size - 1).execute()
+        batch = getattr(res, "data", None) or []
+
+        rows.extend(batch)
+
+        if len(batch) < page_size:
+            break
+
+        start += page_size
+
+    return rows
+
+
+def _df(table_name: str) -> pd.DataFrame:
     try:
-        response = supabase.table(table_name).select("*").execute()
-        return pd.DataFrame(response.data)
-    except Exception as e:
-        st.error(f"Error loading {table_name}: {e}")
+        return pd.DataFrame(_select_all(table_name))
+    except Exception:
         return pd.DataFrame()
 
 
-def insert_row(table_name: str, row_data: dict):
-    try:
-        response = supabase.table(table_name).insert(row_data).execute()
-        return response
-    except Exception as e:
-        st.error(f"Error inserting into {table_name}: {e}")
-        return None
-
-
-def update_row(table_name: str, row_id, update_data: dict):
-    try:
-        response = (
-            supabase
-            .table(table_name)
-            .update(update_data)
-            .eq("id", row_id)
-            .execute()
-        )
-        return response
-    except Exception as e:
-        st.error(f"Error updating {table_name}: {e}")
-        return None
-
-
-def delete_row(table_name: str, row_id):
-    try:
-        response = (
-            supabase
-            .table(table_name)
-            .delete()
-            .eq("id", row_id)
-            .execute()
-        )
-        return response
-    except Exception as e:
-        st.error(f"Error deleting from {table_name}: {e}")
-        return None
-
-
 def load_all_data():
-    sheet_df = load_table("bookings")
-    marketing_df = load_table("marketing_expenditure")
-    hold_df = load_table("holds")
-    cp_payout_df = load_table("cp_payout_tracker")
-    daily_visits_df = load_table("daily_visits")
-    cashflow_slab_master_df = load_table("cashflow_slab_master")
-
     return {
-        "sheet_df": sheet_df,
-        "marketing_df": marketing_df,
-        "hold_df": hold_df,
-        "cp_payout_df": cp_payout_df,
-        "daily_visits_df": daily_visits_df,
-        "cashflow_slab_master_df": cashflow_slab_master_df,
+        "sheet_df": _df(TABLES["bookings"]),
+        "marketing_df": _df(TABLES["marketing"]),
+        "hold_df": _df(TABLES["holds"]),
+        "cp_payout_df": _df(TABLES["cp_payout"]),
+        "daily_visits_df": _df(TABLES["daily_visits"]),
+        "cashflow_slab_master_df": _df(TABLES["cashflow_slab_master"]),
     }
+
+
+def insert_row(table_name: str, row_dict: dict):
+    sb = _get_client()
+    return sb.table(table_name).insert(row_dict).execute()
+
+
+def update_row(table_name: str, row_id, row_dict: dict, id_col: str = "id"):
+    sb = _get_client()
+    return sb.table(table_name).update(row_dict).eq(id_col, row_id).execute()
+
+
+def delete_row(table_name: str, row_id, id_col: str = "id"):
+    sb = _get_client()
+    return sb.table(table_name).delete().eq(id_col, row_id).execute()
+
+
+def refresh_all_data():
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return load_all_data()
