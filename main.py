@@ -12,251 +12,338 @@ from typing import Optional, Tuple, List, Dict
 import streamlit.components.v1 as components
 
 from supabase import create_client
-from supabase_connector import load_all_data, insert_row, update_row, delete_row, set_supabase_client
-
+from supabase_connector import (
+    load_all_data,
+    load_table,
+    insert_row,
+    update_row,
+    delete_row,
+    upsert_row,
+)
 
 # ============================================================
-# SUPABASE AUTH — EMAIL OTP LOGIN
+# STREAMLIT PAGE CONFIG
 # ============================================================
+st.set_page_config(
+    page_title="Pratham Vihar CRM",
+    page_icon="🏢",
+    layout="wide",
+)
 
+# ============================================================
+# SUPABASE CONFIG
+# ============================================================
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 
-supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+# Important:
+# Use ONLY anon key in Streamlit.
+# Do NOT use service_role key in Streamlit app.
+# RLS will work only when user is logged in with Supabase Auth.
 
 
-def _init_auth_state():
-    st.session_state.setdefault("auth_email", "")
-    st.session_state.setdefault("otp_sent", False)
-    st.session_state.setdefault("access_token", None)
-    st.session_state.setdefault("refresh_token", None)
-    st.session_state.setdefault("user_email", None)
+# ============================================================
+# SUPABASE CLIENT HELPERS
+# ============================================================
+@st.cache_resource(show_spinner=False)
+def get_base_supabase_client():
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
-def _restore_supabase_session():
+def get_authenticated_supabase_client():
     """
-    Streamlit reruns the script again and again.
-    This restores the Supabase session after OTP login.
+    Creates Supabase client with the logged-in user's JWT.
+    This is required so Supabase RLS policies can see auth.email().
     """
-    access_token = st.session_state.get("access_token")
-    refresh_token = st.session_state.get("refresh_token")
+    access_token = st.session_state.get("pv_access_token")
+    refresh_token = st.session_state.get("pv_refresh_token")
+
+    client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
     if access_token and refresh_token:
         try:
-            supabase.auth.set_session(access_token, refresh_token)
-            set_supabase_client(supabase)
-            return True
+            client.auth.set_session(access_token, refresh_token)
         except Exception:
-            st.session_state["access_token"] = None
-            st.session_state["refresh_token"] = None
-            st.session_state["user_email"] = None
-            return False
+            pass
 
-    return False
+        # Extra safety for PostgREST requests.
+        try:
+            client.postgrest.auth(access_token)
+        except Exception:
+            pass
+
+    return client
 
 
-def _logout():
+def logout_user():
+    for key in [
+        "pv_access_token",
+        "pv_refresh_token",
+        "pv_user_email",
+        "pv_otp_sent_email",
+        "pv_logged_in",
+    ]:
+        st.session_state.pop(key, None)
+
     try:
-        supabase.auth.sign_out()
+        get_base_supabase_client().auth.sign_out()
     except Exception:
         pass
 
-    st.session_state["access_token"] = None
-    st.session_state["refresh_token"] = None
-    st.session_state["user_email"] = None
-    st.session_state["otp_sent"] = False
-    st.session_state["auth_email"] = ""
     st.rerun()
 
 
-def _otp_login_screen():
-    st.set_page_config(page_title="Pratham Vihar CRM", layout="wide")
+# ============================================================
+# OTP LOGIN UI
+# ============================================================
+def require_otp_login():
+    """
+    Passwordless OTP login.
+    The email must exist in Supabase Authentication if should_create_user=False.
+    The same email should also exist in public.allowed_users.
+    """
+
+    if st.session_state.get("pv_logged_in") and st.session_state.get("pv_access_token"):
+        return
+
+    base_client = get_base_supabase_client()
 
     st.markdown(
         """
         <style>
-        .login-card{
-            max-width: 470px;
-            margin: 8vh auto 0 auto;
-            background: #ffffff;
+        .login-wrap {
+            max-width: 520px;
+            margin: 110px auto 0 auto;
+        }
+        .login-card {
             border: 1px solid #e5e7eb;
-            border-radius: 22px;
-            padding: 26px;
-            box-shadow: 0 18px 40px rgba(15,23,42,.10);
-        }
-        .login-title{
-            text-align:center;
-            font-size: 28px;
-            font-weight: 900;
-            color:#0f172a;
-            margin-bottom: 4px;
-        }
-        .login-sub{
-            text-align:center;
-            color:#64748b;
-            font-size: 14px;
+            border-radius: 20px;
+            padding: 28px 26px;
+            background: white;
+            box-shadow: 0 12px 30px rgba(15,23,42,.08);
+            text-align: center;
             margin-bottom: 18px;
         }
+        .login-title {
+            font-size: 28px;
+            font-weight: 900;
+            color: #0f172a;
+            margin-bottom: 6px;
+        }
+        .login-sub {
+            font-size: 14px;
+            color: #64748b;
+            font-weight: 700;
+        }
         </style>
-        <div class="login-card">
-          <div class="login-title">🏢 Pratham Vihar CRM</div>
-          <div class="login-sub">Login with email OTP</div>
-        </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-    with st.container():
-        c1, c2, c3 = st.columns([1, 1.2, 1])
+    st.markdown("<div class='login-wrap'>", unsafe_allow_html=True)
 
-        with c2:
-            email = st.text_input(
-                "Email",
-                value=st.session_state.get("auth_email", ""),
-                placeholder="Enter your registered email",
-                key="login_email_input"
-            )
+    st.markdown(
+        """
+        <div class="login-card">
+            <div class="login-title">🏢 Pratham Vihar CRM</div>
+            <div class="login-sub">Login with email OTP</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-            send_otp = st.button("📩 Send OTP", use_container_width=True)
+    email = st.text_input(
+        "Email",
+        value=st.session_state.get("pv_otp_sent_email", ""),
+        placeholder="Enter registered email",
+        key="pv_login_email_input",
+    ).strip().lower()
 
-            if send_otp:
-                email_clean = str(email or "").strip().lower()
+    send_otp = st.button("📩 Send OTP", use_container_width=True)
 
-                if not email_clean:
-                    st.error("Please enter your email.")
-                else:
-                    try:
-                        supabase.auth.sign_in_with_otp({
-                            "email": email_clean,
-                            "options": {
-                                "should_create_user": False
-                            }
-                        })
+    if send_otp:
+        if not email:
+            st.error("Please enter your registered email.")
+        else:
+            try:
+                base_client.auth.sign_in_with_otp({
+                    "email": email,
+                    "options": {
+                        # Keep False if you want only pre-created Auth users to login.
+                        # This prevents unknown emails from creating accounts.
+                        "should_create_user": False
+                    }
+                })
 
-                        st.session_state["auth_email"] = email_clean
-                        st.session_state["otp_sent"] = True
-                        st.success("OTP sent. Please check your email.")
-                    except Exception as e:
-                        st.error(
-                            "Could not send OTP. Make sure this email exists in Supabase Authentication "
-                            "and is added in allowed_users."
-                        )
+                st.session_state["pv_otp_sent_email"] = email
+                st.success("OTP sent. Please check your email.")
 
-            if st.session_state.get("otp_sent"):
-                otp = st.text_input(
-                    "Enter OTP",
-                    placeholder="6-digit code",
-                    key="login_otp_input"
+            except Exception as e:
+                st.error(
+                    "Could not send OTP. Make sure this email exists in Supabase Authentication "
+                    "and is added in public.allowed_users."
                 )
 
-                verify = st.button("✅ Verify & Login", type="primary", use_container_width=True)
+    if st.session_state.get("pv_otp_sent_email"):
+        st.divider()
 
-                if verify:
-                    email_clean = str(st.session_state.get("auth_email", "") or "").strip().lower()
-                    otp_clean = str(otp or "").strip()
+        otp = st.text_input(
+            "Enter OTP",
+            placeholder="6-digit OTP",
+            key="pv_login_otp_input",
+        ).strip()
 
-                    if not email_clean or not otp_clean:
-                        st.error("Please enter OTP.")
-                    else:
-                        try:
-                            res = supabase.auth.verify_otp({
-                                "email": email_clean,
-                                "token": otp_clean,
-                                "type": "email"
-                            })
+        verify_otp = st.button("✅ Verify OTP & Login", type="primary", use_container_width=True)
 
-                            session = getattr(res, "session", None)
+        if verify_otp:
+            if not otp:
+                st.error("Please enter OTP.")
+            else:
+                try:
+                    auth_res = base_client.auth.verify_otp({
+                        "email": st.session_state["pv_otp_sent_email"],
+                        "token": otp,
+                        "type": "email",
+                    })
 
-                            if session is None and hasattr(res, "model_dump"):
-                                data = res.model_dump()
-                                session = data.get("session")
+                    session = getattr(auth_res, "session", None)
+                    user = getattr(auth_res, "user", None)
 
-                            if session is None:
-                                st.error("Login failed. Please request a new OTP.")
-                                st.stop()
+                    if session is None:
+                        st.error("Login failed. Please request a fresh OTP.")
+                        st.stop()
 
-                            if isinstance(session, dict):
-                                access_token = session.get("access_token")
-                                refresh_token = session.get("refresh_token")
-                                user_obj = session.get("user") or {}
-                                user_email = user_obj.get("email", email_clean)
-                            else:
-                                access_token = getattr(session, "access_token", None)
-                                refresh_token = getattr(session, "refresh_token", None)
-                                user_obj = getattr(session, "user", None)
-                                user_email = getattr(user_obj, "email", email_clean) if user_obj else email_clean
+                    access_token = getattr(session, "access_token", None)
+                    refresh_token = getattr(session, "refresh_token", None)
+                    user_email = getattr(user, "email", None) or st.session_state["pv_otp_sent_email"]
 
-                            if not access_token or not refresh_token:
-                                st.error("Could not create login session. Please try again.")
-                                st.stop()
+                    if not access_token or not refresh_token:
+                        st.error("Login session not created. Please try again.")
+                        st.stop()
 
-                            st.session_state["access_token"] = access_token
-                            st.session_state["refresh_token"] = refresh_token
-                            st.session_state["user_email"] = user_email
-                            st.session_state["otp_sent"] = False
+                    st.session_state["pv_access_token"] = access_token
+                    st.session_state["pv_refresh_token"] = refresh_token
+                    st.session_state["pv_user_email"] = str(user_email).strip().lower()
+                    st.session_state["pv_logged_in"] = True
 
-                            supabase.auth.set_session(access_token, refresh_token)
-                            set_supabase_client(supabase)
+                    st.success("Login successful.")
+                    st.rerun()
 
-                            st.success("Login successful.")
-                            st.rerun()
+                except Exception:
+                    st.error("Invalid OTP or login failed. Please check the OTP and try again.")
 
-                        except Exception:
-                            st.error("Invalid or expired OTP. Please request a new OTP.")
+    st.divider()
+    st.caption("Only registered CRM users can login.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-            st.markdown("---")
-            st.caption("Only registered CRM users can login.")
-
-
-_init_auth_state()
-
-if not _restore_supabase_session():
-    _otp_login_screen()
     st.stop()
 
-# Make authenticated client available everywhere
-set_supabase_client(supabase)
 
+# ============================================================
+# REQUIRE LOGIN BEFORE APP DATA LOAD
+# ============================================================
+require_otp_login()
+
+supabase = get_authenticated_supabase_client()
+supabase_client = supabase
+
+CURRENT_USER_EMAIL = st.session_state.get("pv_user_email", "")
+
+# Optional sidebar user info
 with st.sidebar:
-    st.success(f"Logged in as: {st.session_state.get('user_email')}")
+    st.caption(f"Logged in as: **{CURRENT_USER_EMAIL}**")
     if st.button("Logout", use_container_width=True):
-        _logout()
+        logout_user()
 
 
 # ============================================================
 # SUPABASE DATA LOAD
 # ============================================================
-
 sheets_connected = True
+supabase_connected = True
 
 try:
-    data = load_all_data()
+    data = load_all_data(supabase)
 
+    # Friendly / backward-compatible dataframes
+    # These mimic your old Google Sheet column names.
     sheet_df = data["sheet_df"]
+    booking_df = sheet_df.copy()
+
     marketing_df = data["marketing_df"]
     hold_df = data["hold_df"]
     cp_payout_df = data["cp_payout_df"]
     daily_visits_df = data["daily_visits_df"]
     cashflow_slab_master_df = data["cashflow_slab_master_df"]
+    sales_targets_df = data.get("sales_targets_df", pd.DataFrame())
+
+    # Raw Supabase dataframes, if needed in newer tabs
+    bookings_raw_df = data.get("bookings_raw_df", pd.DataFrame())
+    marketing_raw_df = data.get("marketing_raw_df", pd.DataFrame())
+    hold_raw_df = data.get("hold_raw_df", pd.DataFrame())
+    cp_payout_raw_df = data.get("cp_payout_raw_df", pd.DataFrame())
+    daily_visits_raw_df = data.get("daily_visits_raw_df", pd.DataFrame())
+    cashflow_slab_master_raw_df = data.get("cashflow_slab_master_raw_df", pd.DataFrame())
+    sales_targets_raw_df = data.get("sales_targets_raw_df", pd.DataFrame())
 
     sheets_connected = True
     supabase_connected = True
 
-    booking_df = sheet_df.copy()
-
 except Exception as e:
-    st.error(f"❌ Error connecting to Supabase: {str(e)}")
+    st.error(f"❌ Error connecting to Supabase or loading data: {str(e)}")
+    st.info(
+        "If login was successful but data is blocked, check that this email is present in "
+        "`public.allowed_users` and that RLS policies are added for all CRM tables."
+    )
 
     sheet_df = pd.DataFrame()
+    booking_df = pd.DataFrame()
     marketing_df = pd.DataFrame()
     hold_df = pd.DataFrame()
     cp_payout_df = pd.DataFrame()
     daily_visits_df = pd.DataFrame()
     cashflow_slab_master_df = pd.DataFrame()
-    booking_df = pd.DataFrame()
+    sales_targets_df = pd.DataFrame()
+
+    bookings_raw_df = pd.DataFrame()
+    marketing_raw_df = pd.DataFrame()
+    hold_raw_df = pd.DataFrame()
+    cp_payout_raw_df = pd.DataFrame()
+    daily_visits_raw_df = pd.DataFrame()
+    cashflow_slab_master_raw_df = pd.DataFrame()
+    sales_targets_raw_df = pd.DataFrame()
 
     sheets_connected = False
     supabase_connected = False
+
+
+# ============================================================
+# COMPATIBILITY PLACEHOLDERS
+# ============================================================
+# Old Google Sheet variables are intentionally set to None.
+# New/updated tabs should use Supabase helper functions instead.
+worksheet = None
+marketing_worksheet = None
+hold_ws = None
+cp_payout_worksheet = None
+daily_visits_worksheet = None
+cashflow_master_worksheet = None
+spreadsheet = None
+
+
+def safe_get_sheet_df(source=None, expected_headers=None):
+    """
+    Compatibility helper.
+    Old code may call safe_get_sheet_df(...).
+    New Supabase code should use load_table(...) or the loaded dataframes above.
+    """
+    if isinstance(source, pd.DataFrame):
+        return source.copy()
+
+    if expected_headers:
+        return pd.DataFrame(columns=expected_headers)
+
+    return pd.DataFrame()
 
 # ---------------- UI CODE ----------------
 st.set_page_config(
@@ -521,7 +608,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # Create tabs - same sequence as old app
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
     "**Dashboard**",
     "**Calculators**",
     "**Booking Punch**",
@@ -535,6 +622,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13
     "**Daily Visits**",
     "**Inventory Status**",
     "**CashFlow**",
+    "**Sales Target**"
     "**Site Summary**"
 ])
 
@@ -24891,7 +24979,774 @@ with tab13:
 
                 st.dataframe(wing_due_df, use_container_width=True, height=460)
 
+# ============================================================
+# TAB 14 — Sales Executive Monthly Targets
+# ============================================================
 with tab14:
+    import re
+    import datetime
+    import pandas as pd
+    import altair as alt
+    import streamlit as st
+
+    st.header("🎯 Sales Executive Monthly Targets")
+    st.caption("Each Sales Executive can set this month’s target once. After submission, it locks until next month.")
+
+    # ============================================================
+    # SUPABASE CONNECTION
+    # ============================================================
+    supabase_client = globals().get("supabase", None) or globals().get("supabase_client", None)
+
+    if supabase_client is None:
+        st.error("Supabase client is not initialized. Please check your Supabase connection block.")
+        st.stop()
+
+    SALES_TARGET_TABLE = "sales_targets"
+    BOOKINGS_TABLE = "bookings"
+
+    # ============================================================
+    # HELPERS
+    # ============================================================
+    def _safe_str(x):
+        if x is None or pd.isna(x):
+            return ""
+        s = str(x).strip()
+        if s.endswith(".0"):
+            s = s[:-2]
+        return s
+
+    def _norm_col(x):
+        return re.sub(r"[^a-z0-9]+", "", str(x or "").lower())
+
+    def _col(df: pd.DataFrame, *names):
+        if df is None or df.empty:
+            return None
+        cmap = {_norm_col(c): c for c in df.columns}
+        for name in names:
+            key = _norm_col(name)
+            if key in cmap:
+                return cmap[key]
+        return None
+
+    def _to_num(x):
+        try:
+            if x is None or pd.isna(x):
+                return 0.0
+            s = str(x).replace("₹", "").replace("Rs.", "").replace("Rs", "").replace(",", "").strip()
+            if s == "":
+                return 0.0
+            return float(s)
+        except Exception:
+            return 0.0
+
+    def _num_series(df, col):
+        if df is None or df.empty or not col or col not in df.columns:
+            return pd.Series(dtype=float)
+        return pd.to_numeric(
+            df[col].astype(str)
+            .str.replace("₹", "", regex=False)
+            .str.replace(",", "", regex=False)
+            .str.strip(),
+            errors="coerce"
+        ).fillna(0.0)
+
+    def _fmt_money(x):
+        return f"₹ {_to_num(x):,.0f}"
+
+    def _fmt_pct(x):
+        try:
+            return f"{float(x):.1f}%"
+        except Exception:
+            return "0.0%"
+
+    def _pct(num, den):
+        den = _to_num(den)
+        num = _to_num(num)
+        if den <= 0:
+            return 0.0
+        return (num / den) * 100.0
+
+    def _get_current_user_email():
+        # Works with most OTP/login implementations.
+        for key in [
+            "user_email",
+            "pv_user_email",
+            "auth_email",
+            "logged_in_email",
+            "email",
+        ]:
+            val = st.session_state.get(key)
+            if val:
+                return str(val).strip().lower()
+
+        try:
+            user_resp = supabase_client.auth.get_user()
+            user_obj = getattr(user_resp, "user", None)
+            email = getattr(user_obj, "email", None)
+            if email:
+                return str(email).strip().lower()
+        except Exception:
+            pass
+
+        return ""
+
+    def _month_start_from_date(dt):
+        if pd.isna(dt):
+            return None
+        return datetime.date(int(dt.year), int(dt.month), 1)
+
+    def _parse_date_series(series):
+        return pd.to_datetime(series, errors="coerce", dayfirst=True)
+
+    @st.cache_data(ttl=180, show_spinner=False)
+    def _sb_select_all(table_name: str, order_col: str = "id") -> list[dict]:
+        rows = []
+        page_size = 1000
+        start = 0
+
+        while True:
+            query = supabase_client.table(table_name).select("*")
+
+            if order_col:
+                try:
+                    query = query.order(order_col)
+                except Exception:
+                    pass
+
+            res = query.range(start, start + page_size - 1).execute()
+            batch = getattr(res, "data", None) or []
+            rows.extend(batch)
+
+            if len(batch) < page_size:
+                break
+
+            start += page_size
+
+        return rows
+
+    def _load_table(table_name: str) -> pd.DataFrame:
+        try:
+            rows = _sb_select_all(table_name)
+            return pd.DataFrame(rows)
+        except Exception as e:
+            st.warning(f"Could not load `{table_name}`: {e}")
+            return pd.DataFrame()
+
+    def _insert_sales_target(row: dict):
+        return supabase_client.table(SALES_TARGET_TABLE).insert(row).execute()
+
+    # ============================================================
+    # CURRENT MONTH
+    # ============================================================
+    today = datetime.date.today()
+    current_month_start = today.replace(day=1)
+    current_month_start_str = current_month_start.isoformat()
+    current_month_label = current_month_start.strftime("%B %y").upper()
+
+    current_user_email = _get_current_user_email()
+
+    if not current_user_email:
+        st.error("User email not found in session. Please make sure OTP login stores the logged-in email.")
+        st.stop()
+
+    # Optional email-to-executive mapping.
+    # Update this if you want the dropdown to auto-select the correct Sales Executive.
+    EMAIL_TO_EXECUTIVE = {
+        "ashumarch15@gmail.com": "Ashutosh S",
+        "tejasp1699@gmail.com": "Tejas P",
+        "komal.lohiajaingroup@gmail.com": "Komal K",
+        # Add or change these as needed:
+        # "gr8gourav@gmail.com": "Sailee D",
+        # "kumarjain0502@gmail.com": "Management",
+        # "kumarj2002@gmail.com": "SK",
+    }
+
+    # ============================================================
+    # LOAD DATA
+    # ============================================================
+    if st.button("🔄 Refresh Target Data", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    targets_df = _load_table(SALES_TARGET_TABLE)
+    bookings_df = _load_table(BOOKINGS_TABLE)
+
+    # ============================================================
+    # PREPARE BOOKINGS DATA — USE BOOKING DATE, NOT MONTH COLUMN
+    # ============================================================
+    b_date_col = _col(bookings_df, "booking_date", "date", "Date")
+    b_sales_exec_col = _col(bookings_df, "sales_executive", "Sales Executive")
+    b_agreement_cost_col = _col(bookings_df, "agreement_cost", "Agreement Cost")
+    b_rate_col = _col(bookings_df, "rate", "Rate")
+
+    if not bookings_df.empty:
+        bookings_work = bookings_df.copy()
+
+        if b_date_col:
+            bookings_work["_BookingDate"] = _parse_date_series(bookings_work[b_date_col])
+            bookings_work["_MonthStart"] = bookings_work["_BookingDate"].apply(_month_start_from_date)
+            bookings_work["_MonthStartStr"] = bookings_work["_MonthStart"].astype(str)
+            bookings_work["_MonthLabel"] = bookings_work["_BookingDate"].dt.strftime("%B %y").str.upper()
+        else:
+            bookings_work["_BookingDate"] = pd.NaT
+            bookings_work["_MonthStart"] = None
+            bookings_work["_MonthStartStr"] = ""
+            bookings_work["_MonthLabel"] = "UNKNOWN"
+
+        if b_sales_exec_col:
+            bookings_work["_SalesExecutive"] = bookings_work[b_sales_exec_col].fillna("").astype(str).str.strip()
+        else:
+            bookings_work["_SalesExecutive"] = ""
+
+        bookings_work["_AgreementCostNum"] = _num_series(bookings_work, b_agreement_cost_col) if b_agreement_cost_col else 0.0
+        bookings_work["_RateNum"] = _num_series(bookings_work, b_rate_col) if b_rate_col else 0.0
+
+        bookings_work = bookings_work[
+            bookings_work["_MonthStart"].notna() &
+            bookings_work["_SalesExecutive"].ne("")
+        ].copy()
+    else:
+        bookings_work = pd.DataFrame()
+
+    # ============================================================
+    # SALES EXECUTIVE OPTIONS
+    # ============================================================
+    default_sales_execs = [
+        "Tejas P",
+        "Ashutosh S",
+        "Komal K",
+        "Sailee D",
+        "Harshal S",
+        "Alok R",
+        "Sagar B",
+        "Advait M",
+    ]
+
+    execs_from_bookings = []
+    if not bookings_work.empty:
+        execs_from_bookings = (
+            bookings_work["_SalesExecutive"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .replace("", pd.NA)
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+    execs_from_targets = []
+    if not targets_df.empty and "sales_executive" in targets_df.columns:
+        execs_from_targets = (
+            targets_df["sales_executive"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .replace("", pd.NA)
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+    sales_exec_options = sorted(set(default_sales_execs + execs_from_bookings + execs_from_targets))
+
+    mapped_exec = EMAIL_TO_EXECUTIVE.get(current_user_email, "")
+
+    if mapped_exec and mapped_exec not in sales_exec_options:
+        sales_exec_options.append(mapped_exec)
+        sales_exec_options = sorted(set(sales_exec_options))
+
+    # ============================================================
+    # CSS
+    # ============================================================
+    st.markdown(
+        """
+        <style>
+        .target-section-card {
+            background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+            color: white;
+            border-radius: 18px;
+            padding: 18px 20px;
+            text-align: center;
+            font-size: 24px;
+            font-weight: 900;
+            margin: 22px 0 16px 0;
+            box-shadow: 0 12px 26px rgba(37, 99, 235, 0.25);
+        }
+        .target-kpi {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 14px;
+            text-align: center;
+            min-height: 112px;
+            box-shadow: 0 8px 18px rgba(15,23,42,.06);
+            margin-bottom: 12px;
+        }
+        .target-kpi h4 {
+            margin: 0;
+            font-size: 12px;
+            color: #475569;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+        }
+        .target-kpi p {
+            margin: 8px 0 0;
+            font-size: 26px;
+            color: #0f172a;
+            font-weight: 900;
+        }
+        .target-kpi span {
+            display: block;
+            margin-top: 6px;
+            font-size: 12px;
+            color: #64748b;
+            font-weight: 700;
+        }
+        .target-blue { background: #eff6ff; }
+        .target-green { background: #ecfdf5; }
+        .target-amber { background: #fff7ed; }
+        .target-rose { background: #fff1f2; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    def section_card(title):
+        st.markdown(f"<div class='target-section-card'>{title}</div>", unsafe_allow_html=True)
+
+    def kpi_card(title, value, sub="", tone="target-blue"):
+        st.markdown(
+            f"""
+            <div class="target-kpi {tone}">
+              <h4>{title}</h4>
+              <p>{value}</p>
+              <span>{sub}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    def style_table(df):
+        return (
+            df.style
+            .set_table_styles([
+                {
+                    "selector": "th",
+                    "props": [
+                        ("background-color", "#2563eb"),
+                        ("color", "white"),
+                        ("font-weight", "900"),
+                        ("text-align", "center"),
+                    ],
+                },
+                {
+                    "selector": "td",
+                    "props": [
+                        ("text-align", "center"),
+                    ],
+                },
+            ])
+        )
+
+    # ============================================================
+    # SECTION 1 — SET CURRENT MONTH TARGET
+    # ============================================================
+    section_card(f"🎯 Set Target for {current_month_label}")
+
+    top1, top2 = st.columns([2, 1])
+    with top1:
+        if mapped_exec:
+            selected_exec = st.selectbox(
+                "Sales Executive",
+                options=sales_exec_options,
+                index=sales_exec_options.index(mapped_exec) if mapped_exec in sales_exec_options else 0,
+                disabled=True,
+                key="target_selected_exec_locked"
+            )
+            st.caption(f"Logged in as: {current_user_email}")
+        else:
+            selected_exec = st.selectbox(
+                "Sales Executive",
+                options=sales_exec_options,
+                key="target_selected_exec"
+            )
+            st.caption(f"Logged in as: {current_user_email}. Email is not mapped, so selection is open.")
+
+    with top2:
+        st.metric("Current Month", current_month_label)
+
+    current_target_row = pd.DataFrame()
+
+    if not targets_df.empty:
+        tdf = targets_df.copy()
+        if "month_start" in tdf.columns:
+            tdf["month_start"] = tdf["month_start"].astype(str)
+        if "sales_executive" in tdf.columns:
+            tdf["sales_executive"] = tdf["sales_executive"].fillna("").astype(str).str.strip()
+
+        current_target_row = tdf[
+            (tdf["month_start"] == current_month_start_str) &
+            (tdf["sales_executive"].str.casefold() == selected_exec.casefold())
+        ].copy()
+
+    target_locked = not current_target_row.empty
+
+    if target_locked:
+        row = current_target_row.iloc[0]
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            kpi_card("Target Bookings", f"{int(_to_num(row.get('target_bookings', 0))):,}", "Locked for this month", "target-blue")
+        with c2:
+            kpi_card("Target Agreement Value", _fmt_money(row.get("target_agreement_value", 0)), "Locked", "target-green")
+        with c3:
+            kpi_card("Target PSF", f"₹ {_to_num(row.get('target_rate_psf', 0)):,.0f}", "Optional target", "target-amber")
+        with c4:
+            locked_at = _safe_str(row.get("locked_at", ""))
+            kpi_card("Status", "Locked", locked_at, "target-rose")
+
+        st.info("This month’s target is already submitted. It cannot be edited now. Next month, the form will unlock automatically.")
+
+        with st.expander("View locked target details", expanded=False):
+            show_cols = [
+                c for c in [
+                    "month", "sales_executive", "target_bookings",
+                    "target_agreement_value", "target_rate_psf",
+                    "remarks", "set_by_email", "locked_at"
+                ] if c in current_target_row.columns
+            ]
+            st.dataframe(
+                style_table(current_target_row[show_cols]),
+                use_container_width=True,
+                hide_index=True
+            )
+
+    else:
+        with st.form("sales_target_form", clear_on_submit=False):
+            st.markdown("### Enter this month’s target")
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                target_bookings = st.number_input(
+                    "Target Bookings *",
+                    min_value=0,
+                    step=1,
+                    value=0,
+                    key="target_bookings_input"
+                )
+            with c2:
+                target_agreement_value = st.number_input(
+                    "Target Agreement Value (₹)",
+                    min_value=0.0,
+                    step=100000.0,
+                    value=0.0,
+                    key="target_agreement_value_input"
+                )
+            with c3:
+                target_rate_psf = st.number_input(
+                    "Target Avg PSF (₹)",
+                    min_value=0.0,
+                    step=50.0,
+                    value=0.0,
+                    key="target_rate_psf_input"
+                )
+
+            remarks = st.text_area(
+                "Remarks",
+                placeholder="Optional target notes",
+                key="target_remarks_input"
+            )
+
+            st.warning("Once submitted, this target will be locked and cannot be changed for this month.")
+
+            submit_target = st.form_submit_button("🔒 Submit & Lock Target", use_container_width=True)
+
+        if submit_target:
+            if not selected_exec:
+                st.error("Please select Sales Executive.")
+            elif target_bookings <= 0 and target_agreement_value <= 0:
+                st.error("Please enter at least Target Bookings or Target Agreement Value.")
+            else:
+                row = {
+                    "month_start": current_month_start_str,
+                    "month": current_month_label,
+                    "sales_executive": selected_exec,
+                    "target_bookings": int(target_bookings),
+                    "target_agreement_value": float(target_agreement_value) if target_agreement_value else None,
+                    "target_rate_psf": float(target_rate_psf) if target_rate_psf else None,
+                    "remarks": remarks.strip() if remarks else None,
+                    "set_by_email": current_user_email,
+                    "locked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                }
+
+                try:
+                    _insert_sales_target(row)
+                    st.cache_data.clear()
+                    st.success("✅ Target submitted and locked for this month.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not save target. It may already be locked for this month. Error: {e}")
+
+    # ============================================================
+    # SECTION 2 — CURRENT MONTH TARGET VS ACHIEVED
+    # ============================================================
+    section_card(f"📊 {current_month_label} Target vs Achieved")
+
+    if not targets_df.empty:
+        current_targets = targets_df.copy()
+
+        if "month_start" in current_targets.columns:
+            current_targets["month_start"] = current_targets["month_start"].astype(str)
+        else:
+            current_targets["month_start"] = ""
+
+        current_targets = current_targets[current_targets["month_start"] == current_month_start_str].copy()
+
+        if "sales_executive" not in current_targets.columns:
+            current_targets["sales_executive"] = ""
+
+        current_targets["sales_executive"] = current_targets["sales_executive"].fillna("").astype(str).str.strip()
+        current_targets["target_bookings"] = pd.to_numeric(current_targets.get("target_bookings", 0), errors="coerce").fillna(0).astype(int)
+        current_targets["target_agreement_value"] = pd.to_numeric(current_targets.get("target_agreement_value", 0), errors="coerce").fillna(0.0)
+        current_targets["target_rate_psf"] = pd.to_numeric(current_targets.get("target_rate_psf", 0), errors="coerce").fillna(0.0)
+    else:
+        current_targets = pd.DataFrame()
+
+    if not bookings_work.empty:
+        current_actuals = bookings_work[bookings_work["_MonthStartStr"] == current_month_start_str].copy()
+
+        actual_summary = (
+            current_actuals
+            .groupby("_SalesExecutive", as_index=False)
+            .agg(
+                Achieved_Bookings=("_SalesExecutive", "size"),
+                Achieved_Agreement_Value=("_AgreementCostNum", "sum"),
+                Achieved_Avg_PSF=("_RateNum", "mean"),
+            )
+            .rename(columns={"_SalesExecutive": "sales_executive"})
+        )
+    else:
+        actual_summary = pd.DataFrame(columns=[
+            "sales_executive", "Achieved_Bookings",
+            "Achieved_Agreement_Value", "Achieved_Avg_PSF"
+        ])
+
+    if current_targets.empty:
+        st.info("No targets submitted for this month yet.")
+    else:
+        current_perf = current_targets.merge(
+            actual_summary,
+            on="sales_executive",
+            how="left"
+        )
+
+        for c in ["Achieved_Bookings", "Achieved_Agreement_Value", "Achieved_Avg_PSF"]:
+            if c not in current_perf.columns:
+                current_perf[c] = 0
+
+        current_perf["Achieved_Bookings"] = pd.to_numeric(current_perf["Achieved_Bookings"], errors="coerce").fillna(0).astype(int)
+        current_perf["Achieved_Agreement_Value"] = pd.to_numeric(current_perf["Achieved_Agreement_Value"], errors="coerce").fillna(0.0)
+        current_perf["Achieved_Avg_PSF"] = pd.to_numeric(current_perf["Achieved_Avg_PSF"], errors="coerce").fillna(0.0)
+
+        current_perf["Booking Achievement %"] = current_perf.apply(
+            lambda r: _pct(r["Achieved_Bookings"], r["target_bookings"]),
+            axis=1
+        )
+        current_perf["Agreement Value Achievement %"] = current_perf.apply(
+            lambda r: _pct(r["Achieved_Agreement_Value"], r["target_agreement_value"]),
+            axis=1
+        )
+
+        display_perf = current_perf[[
+            "month",
+            "sales_executive",
+            "target_bookings",
+            "Achieved_Bookings",
+            "Booking Achievement %",
+            "target_agreement_value",
+            "Achieved_Agreement_Value",
+            "Agreement Value Achievement %",
+            "target_rate_psf",
+            "Achieved_Avg_PSF",
+        ]].copy()
+
+        display_perf = display_perf.rename(columns={
+            "month": "Month",
+            "sales_executive": "Sales Executive",
+            "target_bookings": "Target Bookings",
+            "Achieved_Bookings": "Achieved Bookings",
+            "target_agreement_value": "Target Agreement Value",
+            "Achieved_Agreement_Value": "Achieved Agreement Value",
+            "target_rate_psf": "Target PSF",
+            "Achieved_Avg_PSF": "Achieved Avg PSF",
+        })
+
+        money_cols = ["Target Agreement Value", "Achieved Agreement Value"]
+        pct_cols = ["Booking Achievement %", "Agreement Value Achievement %"]
+
+        display_for_table = display_perf.copy()
+        for c in money_cols:
+            display_for_table[c] = display_for_table[c].apply(_fmt_money)
+        for c in pct_cols:
+            display_for_table[c] = display_for_table[c].apply(_fmt_pct)
+        display_for_table["Target PSF"] = display_for_table["Target PSF"].apply(lambda x: f"₹ {_to_num(x):,.0f}")
+        display_for_table["Achieved Avg PSF"] = display_for_table["Achieved Avg PSF"].apply(lambda x: f"₹ {_to_num(x):,.0f}")
+
+        st.dataframe(style_table(display_for_table), use_container_width=True, hide_index=True)
+
+        # Chart with values
+        chart_df = current_perf[[
+            "sales_executive",
+            "target_bookings",
+            "Achieved_Bookings",
+        ]].copy()
+
+        chart_df = chart_df.rename(columns={
+            "sales_executive": "Sales Executive",
+            "target_bookings": "Target",
+            "Achieved_Bookings": "Achieved",
+        })
+
+        chart_long = chart_df.melt(
+            id_vars="Sales Executive",
+            var_name="Metric",
+            value_name="Bookings"
+        )
+
+        bar = alt.Chart(chart_long).mark_bar().encode(
+            x=alt.X("Sales Executive:N", title="Sales Executive"),
+            xOffset=alt.XOffset("Metric:N"),
+            y=alt.Y("Bookings:Q", title="Bookings"),
+            color=alt.Color("Metric:N", scale=alt.Scale(range=["#2563eb", "#10b981"])),
+            tooltip=[
+                "Sales Executive:N",
+                "Metric:N",
+                alt.Tooltip("Bookings:Q", format=",")
+            ]
+        ).properties(
+            height=360,
+            title="Current Month — Target vs Achieved Bookings"
+        )
+
+        labels = alt.Chart(chart_long).mark_text(
+            dy=-8,
+            fontSize=12,
+            fontWeight="bold"
+        ).encode(
+            x=alt.X("Sales Executive:N"),
+            xOffset=alt.XOffset("Metric:N"),
+            y=alt.Y("Bookings:Q"),
+            text=alt.Text("Bookings:Q", format=","),
+            color=alt.value("#0f172a")
+        )
+
+        st.altair_chart(bar + labels, use_container_width=True)
+
+    # ============================================================
+    # SECTION 3 — HISTORY
+    # ============================================================
+    section_card("📅 Month-wise Sales Executive Target History")
+
+    if targets_df.empty:
+        st.info("No target history available yet.")
+    else:
+        hist = targets_df.copy()
+
+        if "month_start" in hist.columns:
+            hist["_MonthStart"] = pd.to_datetime(hist["month_start"], errors="coerce")
+            hist["_MonthSort"] = hist["_MonthStart"].dt.strftime("%Y-%m")
+        else:
+            hist["_MonthStart"] = pd.NaT
+            hist["_MonthSort"] = ""
+
+        hist["sales_executive"] = hist["sales_executive"].fillna("").astype(str).str.strip()
+        hist["target_bookings"] = pd.to_numeric(hist.get("target_bookings", 0), errors="coerce").fillna(0).astype(int)
+        hist["target_agreement_value"] = pd.to_numeric(hist.get("target_agreement_value", 0), errors="coerce").fillna(0.0)
+        hist["target_rate_psf"] = pd.to_numeric(hist.get("target_rate_psf", 0), errors="coerce").fillna(0.0)
+
+        if not bookings_work.empty:
+            all_actuals = (
+                bookings_work
+                .groupby(["_MonthStartStr", "_SalesExecutive"], as_index=False)
+                .agg(
+                    Achieved_Bookings=("_SalesExecutive", "size"),
+                    Achieved_Agreement_Value=("_AgreementCostNum", "sum"),
+                    Achieved_Avg_PSF=("_RateNum", "mean"),
+                )
+                .rename(columns={
+                    "_MonthStartStr": "month_start",
+                    "_SalesExecutive": "sales_executive",
+                })
+            )
+        else:
+            all_actuals = pd.DataFrame(columns=[
+                "month_start", "sales_executive",
+                "Achieved_Bookings", "Achieved_Agreement_Value", "Achieved_Avg_PSF"
+            ])
+
+        hist["month_start"] = hist["month_start"].astype(str)
+
+        hist_perf = hist.merge(
+            all_actuals,
+            on=["month_start", "sales_executive"],
+            how="left"
+        )
+
+        for c in ["Achieved_Bookings", "Achieved_Agreement_Value", "Achieved_Avg_PSF"]:
+            hist_perf[c] = pd.to_numeric(hist_perf.get(c, 0), errors="coerce").fillna(0.0)
+
+        hist_perf["Booking Achievement %"] = hist_perf.apply(
+            lambda r: _pct(r["Achieved_Bookings"], r["target_bookings"]),
+            axis=1
+        )
+
+        hist_display = hist_perf[[
+            "month",
+            "sales_executive",
+            "target_bookings",
+            "Achieved_Bookings",
+            "Booking Achievement %",
+            "target_agreement_value",
+            "Achieved_Agreement_Value",
+            "target_rate_psf",
+            "Achieved_Avg_PSF",
+            "set_by_email",
+            "locked_at",
+        ]].copy()
+
+        hist_display = hist_display.rename(columns={
+            "month": "Month",
+            "sales_executive": "Sales Executive",
+            "target_bookings": "Target Bookings",
+            "Achieved_Bookings": "Achieved Bookings",
+            "target_agreement_value": "Target Agreement Value",
+            "Achieved_Agreement_Value": "Achieved Agreement Value",
+            "target_rate_psf": "Target PSF",
+            "Achieved_Avg_PSF": "Achieved Avg PSF",
+            "set_by_email": "Set By Email",
+            "locked_at": "Locked At",
+        })
+
+        hist_display["Booking Achievement %"] = hist_display["Booking Achievement %"].apply(_fmt_pct)
+        hist_display["Target Agreement Value"] = hist_display["Target Agreement Value"].apply(_fmt_money)
+        hist_display["Achieved Agreement Value"] = hist_display["Achieved Agreement Value"].apply(_fmt_money)
+        hist_display["Target PSF"] = hist_display["Target PSF"].apply(lambda x: f"₹ {_to_num(x):,.0f}")
+        hist_display["Achieved Avg PSF"] = hist_display["Achieved Avg PSF"].apply(lambda x: f"₹ {_to_num(x):,.0f}")
+
+        st.dataframe(style_table(hist_display), use_container_width=True, hide_index=True)
+
+        csv_bytes = hist_display.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Download Target History CSV",
+            data=csv_bytes,
+            file_name="sales_target_history.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+with tab15:
     import re
     import io
     import ssl
