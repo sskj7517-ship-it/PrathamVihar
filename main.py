@@ -8,39 +8,200 @@ import io
 from io import StringIO
 import altair as alt
 import os
+import re
 from typing import Optional, Tuple, List, Dict
 import streamlit.components.v1 as components
 
-from supabase_connector import load_all_data, insert_row, update_row, delete_row
 from supabase import create_client
-import streamlit as st
+
+from supabase_connector import (
+    set_supabase_client,
+    load_all_data,
+    insert_row,
+    update_row,
+    delete_row,
+)
+
+# ============================================================
+# SUPABASE CONFIG
+# ============================================================
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 
-supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-sheets_connected = True
+# ============================================================
+# AUTH HELPERS
+# ============================================================
+
+def _clear_auth_session():
+    for k in [
+        "pv_access_token",
+        "pv_refresh_token",
+        "pv_user_email",
+        "pv_user_id",
+        "pv_is_logged_in",
+    ]:
+        st.session_state.pop(k, None)
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 
-# ---------------- SUPABASE DATA LOAD ----------------
+def _new_supabase_client():
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+
+def _restore_supabase_session(sb):
+    access_token = st.session_state.get("pv_access_token")
+    refresh_token = st.session_state.get("pv_refresh_token")
+
+    if access_token and refresh_token:
+        try:
+            sb.auth.set_session(access_token, refresh_token)
+        except Exception:
+            _clear_auth_session()
+            st.warning("Your login session expired. Please login again.")
+            st.stop()
+
+    return sb
+
+
+def _check_allowed_user(sb) -> bool:
+    """
+    This expects your SQL helper function public.is_allowed_user().
+    If that function exists, unauthorized users will be stopped here.
+    RLS policies will also protect tables directly.
+    """
+    try:
+        res = sb.rpc("is_allowed_user").execute()
+        return bool(res.data)
+    except Exception:
+        # If RPC is not available, don't crash the whole app.
+        # RLS policies will still protect the tables.
+        return True
+
+
+def _login_screen():
+    st.markdown("## 🔐 Login Required")
+    st.caption("Login with your registered Supabase Auth email to use Pratham Vihar CRM.")
+
+    with st.form("pv_login_form", clear_on_submit=False):
+        email = st.text_input("Email", placeholder="example@email.com")
+        password = st.text_input("Password", type="password")
+        login_btn = st.form_submit_button("Login", type="primary", use_container_width=True)
+
+    if login_btn:
+        if not email.strip() or not password.strip():
+            st.error("Please enter both email and password.")
+            st.stop()
+
+        sb = _new_supabase_client()
+
+        try:
+            auth_res = sb.auth.sign_in_with_password({
+                "email": email.strip(),
+                "password": password.strip(),
+            })
+
+            session = auth_res.session
+            user = auth_res.user
+
+            if session is None or user is None:
+                st.error("Login failed. Please check email and password.")
+                st.stop()
+
+            st.session_state["pv_access_token"] = session.access_token
+            st.session_state["pv_refresh_token"] = session.refresh_token
+            st.session_state["pv_user_email"] = user.email
+            st.session_state["pv_user_id"] = user.id
+            st.session_state["pv_is_logged_in"] = True
+
+            sb = _restore_supabase_session(_new_supabase_client())
+
+            if not _check_allowed_user(sb):
+                _clear_auth_session()
+                st.error("Your email is not allowed to access this CRM.")
+                st.stop()
+
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+
+            st.success("Login successful.")
+            st.rerun()
+
+        except Exception as e:
+            st.error("Login failed. Please check your Supabase Auth user and password.")
+            st.caption(str(e))
+            st.stop()
+
+    st.stop()
+
+
+def require_login_and_get_supabase():
+    if not st.session_state.get("pv_access_token") or not st.session_state.get("pv_refresh_token"):
+        _login_screen()
+
+    sb = _restore_supabase_session(_new_supabase_client())
+
+    if not _check_allowed_user(sb):
+        _clear_auth_session()
+        st.error("Your email is not allowed to access this CRM.")
+        st.stop()
+
+    with st.sidebar:
+        st.markdown("### 👤 Logged in")
+        st.write(st.session_state.get("pv_user_email", ""))
+
+        if st.button("Logout", use_container_width=True):
+            try:
+                sb.auth.sign_out()
+            except Exception:
+                pass
+
+            _clear_auth_session()
+            st.rerun()
+
+    return sb
+
+
+# ============================================================
+# SECURE AUTHENTICATED SUPABASE CLIENT
+# ============================================================
+
+supabase = require_login_and_get_supabase()
+supabase_client = supabase
+
+# Important: this makes your existing helper functions use the logged-in client.
+set_supabase_client(supabase)
+
+
+# ============================================================
+# SUPABASE DATA LOAD
+# ============================================================
+
 try:
     data = load_all_data()
 
-    sheet_df = data["sheet_df"]
-    marketing_df = data["marketing_df"]
-    hold_df = data["hold_df"]
-    cp_payout_df = data["cp_payout_df"]
-    daily_visits_df = data["daily_visits_df"]
-    cashflow_slab_master_df = data["cashflow_slab_master_df"]
+    sheet_df = data.get("sheet_df", pd.DataFrame())
+    marketing_df = data.get("marketing_df", pd.DataFrame())
+    hold_df = data.get("hold_df", pd.DataFrame())
+    cp_payout_df = data.get("cp_payout_df", pd.DataFrame())
+    daily_visits_df = data.get("daily_visits_df", pd.DataFrame())
+    cashflow_slab_master_df = data.get("cashflow_slab_master_df", pd.DataFrame())
+
+    booking_df = sheet_df.copy()
+    bookings_df = sheet_df.copy()
 
     sheets_connected = True
     supabase_connected = True
 
-    booking_df = sheet_df.copy()
-
 except Exception as e:
-    st.error(f"❌ Error connecting to Supabase: {str(e)}")
+    st.error(f"❌ Error loading Supabase data: {str(e)}")
 
     sheet_df = pd.DataFrame()
     marketing_df = pd.DataFrame()
@@ -49,10 +210,12 @@ except Exception as e:
     daily_visits_df = pd.DataFrame()
     cashflow_slab_master_df = pd.DataFrame()
     booking_df = pd.DataFrame()
+    bookings_df = pd.DataFrame()
 
     sheets_connected = False
     supabase_connected = False
 
+    st.stop()
 
 # ---------------- UI CODE ----------------
 st.set_page_config(
