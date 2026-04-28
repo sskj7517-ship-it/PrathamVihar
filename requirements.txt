@@ -12,3 +12,4 @@ python-docx
 jinja2
 google-genai>=0.5.0
 python-dotenv
+matplotlib
