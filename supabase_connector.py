@@ -1,39 +1,25 @@
-import pandas as pd
 import streamlit as st
+import pandas as pd
 from supabase import create_client
 
-_SUPABASE_CLIENT = None
 
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 
-TABLES = {
-    "bookings": "bookings",
-    "marketing": "marketing_expenditure",
-    "holds": "holds",
-    "cp_payout": "cp_payout_tracker",
-    "daily_visits": "daily_visits",
-    "cashflow_slab_master": "cashflow_slab_master",
-}
+_supabase_client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
 def set_supabase_client(client):
-    global _SUPABASE_CLIENT
-    _SUPABASE_CLIENT = client
+    global _supabase_client
+    _supabase_client = client
 
 
-def _get_client():
-    global _SUPABASE_CLIENT
-
-    if _SUPABASE_CLIENT is not None:
-        return _SUPABASE_CLIENT
-
-    url = st.secrets["SUPABASE_URL"]
-    anon_key = st.secrets["SUPABASE_ANON_KEY"]
-    _SUPABASE_CLIENT = create_client(url, anon_key)
-    return _SUPABASE_CLIENT
+def get_supabase():
+    return _supabase_client
 
 
 def _select_all(table_name: str, order_col: str = "id") -> list[dict]:
-    sb = _get_client()
+    sb = get_supabase()
 
     rows = []
     page_size = 1000
@@ -61,43 +47,34 @@ def _select_all(table_name: str, order_col: str = "id") -> list[dict]:
     return rows
 
 
-def _df(table_name: str) -> pd.DataFrame:
-    try:
-        return pd.DataFrame(_select_all(table_name))
-    except Exception:
-        return pd.DataFrame()
-
-
 def load_all_data():
+    bookings = pd.DataFrame(_select_all("bookings"))
+    marketing = pd.DataFrame(_select_all("marketing_expenditure"))
+    holds = pd.DataFrame(_select_all("holds"))
+    cp_payout = pd.DataFrame(_select_all("cp_payout_tracker"))
+    daily_visits = pd.DataFrame(_select_all("daily_visits"))
+    cashflow_slab_master = pd.DataFrame(_select_all("cashflow_slab_master"))
+
     return {
-        "sheet_df": _df(TABLES["bookings"]),
-        "marketing_df": _df(TABLES["marketing"]),
-        "hold_df": _df(TABLES["holds"]),
-        "cp_payout_df": _df(TABLES["cp_payout"]),
-        "daily_visits_df": _df(TABLES["daily_visits"]),
-        "cashflow_slab_master_df": _df(TABLES["cashflow_slab_master"]),
+        "sheet_df": bookings,
+        "marketing_df": marketing,
+        "hold_df": holds,
+        "cp_payout_df": cp_payout,
+        "daily_visits_df": daily_visits,
+        "cashflow_slab_master_df": cashflow_slab_master,
     }
 
 
-def insert_row(table_name: str, row_dict: dict):
-    sb = _get_client()
-    return sb.table(table_name).insert(row_dict).execute()
+def insert_row(table_name: str, row: dict):
+    sb = get_supabase()
+    return sb.table(table_name).insert(row).execute()
 
 
-def update_row(table_name: str, row_id, row_dict: dict, id_col: str = "id"):
-    sb = _get_client()
-    return sb.table(table_name).update(row_dict).eq(id_col, row_id).execute()
+def update_row(table_name: str, row_id, updates: dict):
+    sb = get_supabase()
+    return sb.table(table_name).update(updates).eq("id", row_id).execute()
 
 
-def delete_row(table_name: str, row_id, id_col: str = "id"):
-    sb = _get_client()
-    return sb.table(table_name).delete().eq(id_col, row_id).execute()
-
-
-def refresh_all_data():
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
-
-    return load_all_data()
+def delete_row(table_name: str, row_id):
+    sb = get_supabase()
+    return sb.table(table_name).delete().eq("id", row_id).execute()
