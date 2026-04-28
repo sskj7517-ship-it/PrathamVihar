@@ -8,200 +8,244 @@ import io
 from io import StringIO
 import altair as alt
 import os
-import re
 from typing import Optional, Tuple, List, Dict
 import streamlit.components.v1 as components
 
 from supabase import create_client
+from supabase_connector import load_all_data, insert_row, update_row, delete_row, set_supabase_client
 
-from supabase_connector import (
-    set_supabase_client,
-    load_all_data,
-    insert_row,
-    update_row,
-    delete_row,
-)
 
 # ============================================================
-# SUPABASE CONFIG
+# SUPABASE AUTH — EMAIL OTP LOGIN
 # ============================================================
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 
-
-# ============================================================
-# AUTH HELPERS
-# ============================================================
-
-def _clear_auth_session():
-    for k in [
-        "pv_access_token",
-        "pv_refresh_token",
-        "pv_user_email",
-        "pv_user_id",
-        "pv_is_logged_in",
-    ]:
-        st.session_state.pop(k, None)
-
-    try:
-        st.cache_data.clear()
-    except Exception:
-        pass
+supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
-def _new_supabase_client():
-    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+def _init_auth_state():
+    st.session_state.setdefault("auth_email", "")
+    st.session_state.setdefault("otp_sent", False)
+    st.session_state.setdefault("access_token", None)
+    st.session_state.setdefault("refresh_token", None)
+    st.session_state.setdefault("user_email", None)
 
 
-def _restore_supabase_session(sb):
-    access_token = st.session_state.get("pv_access_token")
-    refresh_token = st.session_state.get("pv_refresh_token")
+def _restore_supabase_session():
+    """
+    Streamlit reruns the script again and again.
+    This restores the Supabase session after OTP login.
+    """
+    access_token = st.session_state.get("access_token")
+    refresh_token = st.session_state.get("refresh_token")
 
     if access_token and refresh_token:
         try:
-            sb.auth.set_session(access_token, refresh_token)
+            supabase.auth.set_session(access_token, refresh_token)
+            set_supabase_client(supabase)
+            return True
         except Exception:
-            _clear_auth_session()
-            st.warning("Your login session expired. Please login again.")
-            st.stop()
+            st.session_state["access_token"] = None
+            st.session_state["refresh_token"] = None
+            st.session_state["user_email"] = None
+            return False
 
-    return sb
+    return False
 
 
-def _check_allowed_user(sb) -> bool:
-    """
-    This expects your SQL helper function public.is_allowed_user().
-    If that function exists, unauthorized users will be stopped here.
-    RLS policies will also protect tables directly.
-    """
+def _logout():
     try:
-        res = sb.rpc("is_allowed_user").execute()
-        return bool(res.data)
+        supabase.auth.sign_out()
     except Exception:
-        # If RPC is not available, don't crash the whole app.
-        # RLS policies will still protect the tables.
-        return True
+        pass
+
+    st.session_state["access_token"] = None
+    st.session_state["refresh_token"] = None
+    st.session_state["user_email"] = None
+    st.session_state["otp_sent"] = False
+    st.session_state["auth_email"] = ""
+    st.rerun()
 
 
-def _login_screen():
-    st.markdown("## 🔐 Login Required")
-    st.caption("Login with your registered Supabase Auth email to use Pratham Vihar CRM.")
+def _otp_login_screen():
+    st.set_page_config(page_title="Pratham Vihar CRM", layout="wide")
 
-    with st.form("pv_login_form", clear_on_submit=False):
-        email = st.text_input("Email", placeholder="example@email.com")
-        password = st.text_input("Password", type="password")
-        login_btn = st.form_submit_button("Login", type="primary", use_container_width=True)
+    st.markdown(
+        """
+        <style>
+        .login-card{
+            max-width: 470px;
+            margin: 8vh auto 0 auto;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 22px;
+            padding: 26px;
+            box-shadow: 0 18px 40px rgba(15,23,42,.10);
+        }
+        .login-title{
+            text-align:center;
+            font-size: 28px;
+            font-weight: 900;
+            color:#0f172a;
+            margin-bottom: 4px;
+        }
+        .login-sub{
+            text-align:center;
+            color:#64748b;
+            font-size: 14px;
+            margin-bottom: 18px;
+        }
+        </style>
+        <div class="login-card">
+          <div class="login-title">🏢 Pratham Vihar CRM</div>
+          <div class="login-sub">Login with email OTP</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    if login_btn:
-        if not email.strip() or not password.strip():
-            st.error("Please enter both email and password.")
-            st.stop()
+    with st.container():
+        c1, c2, c3 = st.columns([1, 1.2, 1])
 
-        sb = _new_supabase_client()
+        with c2:
+            email = st.text_input(
+                "Email",
+                value=st.session_state.get("auth_email", ""),
+                placeholder="Enter your registered email",
+                key="login_email_input"
+            )
 
-        try:
-            auth_res = sb.auth.sign_in_with_password({
-                "email": email.strip(),
-                "password": password.strip(),
-            })
+            send_otp = st.button("📩 Send OTP", use_container_width=True)
 
-            session = auth_res.session
-            user = auth_res.user
+            if send_otp:
+                email_clean = str(email or "").strip().lower()
 
-            if session is None or user is None:
-                st.error("Login failed. Please check email and password.")
-                st.stop()
+                if not email_clean:
+                    st.error("Please enter your email.")
+                else:
+                    try:
+                        supabase.auth.sign_in_with_otp({
+                            "email": email_clean,
+                            "options": {
+                                "should_create_user": False
+                            }
+                        })
 
-            st.session_state["pv_access_token"] = session.access_token
-            st.session_state["pv_refresh_token"] = session.refresh_token
-            st.session_state["pv_user_email"] = user.email
-            st.session_state["pv_user_id"] = user.id
-            st.session_state["pv_is_logged_in"] = True
+                        st.session_state["auth_email"] = email_clean
+                        st.session_state["otp_sent"] = True
+                        st.success("OTP sent. Please check your email.")
+                    except Exception as e:
+                        st.error(
+                            "Could not send OTP. Make sure this email exists in Supabase Authentication "
+                            "and is added in allowed_users."
+                        )
 
-            sb = _restore_supabase_session(_new_supabase_client())
+            if st.session_state.get("otp_sent"):
+                otp = st.text_input(
+                    "Enter OTP",
+                    placeholder="6-digit code",
+                    key="login_otp_input"
+                )
 
-            if not _check_allowed_user(sb):
-                _clear_auth_session()
-                st.error("Your email is not allowed to access this CRM.")
-                st.stop()
+                verify = st.button("✅ Verify & Login", type="primary", use_container_width=True)
 
-            try:
-                st.cache_data.clear()
-            except Exception:
-                pass
+                if verify:
+                    email_clean = str(st.session_state.get("auth_email", "") or "").strip().lower()
+                    otp_clean = str(otp or "").strip()
 
-            st.success("Login successful.")
-            st.rerun()
+                    if not email_clean or not otp_clean:
+                        st.error("Please enter OTP.")
+                    else:
+                        try:
+                            res = supabase.auth.verify_otp({
+                                "email": email_clean,
+                                "token": otp_clean,
+                                "type": "email"
+                            })
 
-        except Exception as e:
-            st.error("Login failed. Please check your Supabase Auth user and password.")
-            st.caption(str(e))
-            st.stop()
+                            session = getattr(res, "session", None)
 
+                            if session is None and hasattr(res, "model_dump"):
+                                data = res.model_dump()
+                                session = data.get("session")
+
+                            if session is None:
+                                st.error("Login failed. Please request a new OTP.")
+                                st.stop()
+
+                            if isinstance(session, dict):
+                                access_token = session.get("access_token")
+                                refresh_token = session.get("refresh_token")
+                                user_obj = session.get("user") or {}
+                                user_email = user_obj.get("email", email_clean)
+                            else:
+                                access_token = getattr(session, "access_token", None)
+                                refresh_token = getattr(session, "refresh_token", None)
+                                user_obj = getattr(session, "user", None)
+                                user_email = getattr(user_obj, "email", email_clean) if user_obj else email_clean
+
+                            if not access_token or not refresh_token:
+                                st.error("Could not create login session. Please try again.")
+                                st.stop()
+
+                            st.session_state["access_token"] = access_token
+                            st.session_state["refresh_token"] = refresh_token
+                            st.session_state["user_email"] = user_email
+                            st.session_state["otp_sent"] = False
+
+                            supabase.auth.set_session(access_token, refresh_token)
+                            set_supabase_client(supabase)
+
+                            st.success("Login successful.")
+                            st.rerun()
+
+                        except Exception:
+                            st.error("Invalid or expired OTP. Please request a new OTP.")
+
+            st.markdown("---")
+            st.caption("Only registered CRM users can login.")
+
+
+_init_auth_state()
+
+if not _restore_supabase_session():
+    _otp_login_screen()
     st.stop()
 
-
-def require_login_and_get_supabase():
-    if not st.session_state.get("pv_access_token") or not st.session_state.get("pv_refresh_token"):
-        _login_screen()
-
-    sb = _restore_supabase_session(_new_supabase_client())
-
-    if not _check_allowed_user(sb):
-        _clear_auth_session()
-        st.error("Your email is not allowed to access this CRM.")
-        st.stop()
-
-    with st.sidebar:
-        st.markdown("### 👤 Logged in")
-        st.write(st.session_state.get("pv_user_email", ""))
-
-        if st.button("Logout", use_container_width=True):
-            try:
-                sb.auth.sign_out()
-            except Exception:
-                pass
-
-            _clear_auth_session()
-            st.rerun()
-
-    return sb
-
-
-# ============================================================
-# SECURE AUTHENTICATED SUPABASE CLIENT
-# ============================================================
-
-supabase = require_login_and_get_supabase()
-supabase_client = supabase
-
-# Important: this makes your existing helper functions use the logged-in client.
+# Make authenticated client available everywhere
 set_supabase_client(supabase)
+
+with st.sidebar:
+    st.success(f"Logged in as: {st.session_state.get('user_email')}")
+    if st.button("Logout", use_container_width=True):
+        _logout()
 
 
 # ============================================================
 # SUPABASE DATA LOAD
 # ============================================================
 
+sheets_connected = True
+
 try:
     data = load_all_data()
 
-    sheet_df = data.get("sheet_df", pd.DataFrame())
-    marketing_df = data.get("marketing_df", pd.DataFrame())
-    hold_df = data.get("hold_df", pd.DataFrame())
-    cp_payout_df = data.get("cp_payout_df", pd.DataFrame())
-    daily_visits_df = data.get("daily_visits_df", pd.DataFrame())
-    cashflow_slab_master_df = data.get("cashflow_slab_master_df", pd.DataFrame())
-
-    booking_df = sheet_df.copy()
-    bookings_df = sheet_df.copy()
+    sheet_df = data["sheet_df"]
+    marketing_df = data["marketing_df"]
+    hold_df = data["hold_df"]
+    cp_payout_df = data["cp_payout_df"]
+    daily_visits_df = data["daily_visits_df"]
+    cashflow_slab_master_df = data["cashflow_slab_master_df"]
 
     sheets_connected = True
     supabase_connected = True
 
+    booking_df = sheet_df.copy()
+
 except Exception as e:
-    st.error(f"❌ Error loading Supabase data: {str(e)}")
+    st.error(f"❌ Error connecting to Supabase: {str(e)}")
 
     sheet_df = pd.DataFrame()
     marketing_df = pd.DataFrame()
@@ -210,12 +254,9 @@ except Exception as e:
     daily_visits_df = pd.DataFrame()
     cashflow_slab_master_df = pd.DataFrame()
     booking_df = pd.DataFrame()
-    bookings_df = pd.DataFrame()
 
     sheets_connected = False
     supabase_connected = False
-
-    st.stop()
 
 # ---------------- UI CODE ----------------
 st.set_page_config(
