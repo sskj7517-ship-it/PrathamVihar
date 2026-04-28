@@ -24980,7 +24980,7 @@ with tab13:
                 st.dataframe(wing_due_df, use_container_width=True, height=460)
 
 # ============================================================
-# TAB 14 — Sales Executive Monthly Targets
+# TAB 17 — Sales Executive Monthly Booking Targets
 # ============================================================
 with tab14:
     import re
@@ -24989,8 +24989,8 @@ with tab14:
     import altair as alt
     import streamlit as st
 
-    st.header("🎯 Sales Executive Monthly Targets")
-    st.caption("Each Sales Executive can set this month’s target once. After submission, it locks until next month.")
+    st.header("🎯 Sales Executive Monthly Booking Targets")
+    st.caption("Enter this month’s booking target for every Sales Executive. Once submitted, targets are locked until next month.")
 
     # ============================================================
     # SUPABASE CONNECTION
@@ -25005,11 +25005,30 @@ with tab14:
     BOOKINGS_TABLE = "bookings"
 
     # ============================================================
+    # FIXED SALES EXECUTIVE LIST
+    # ============================================================
+    SALES_EXECUTIVES = [
+        "Tejas P",
+        "Ashutosh S",
+        "Komal K",
+        "Sailee D",
+        "Harshal S",
+        "Alok R",
+        "Sagar B",
+        "Advait M",
+    ]
+
+    # ============================================================
     # HELPERS
     # ============================================================
     def _safe_str(x):
-        if x is None or pd.isna(x):
+        if x is None:
             return ""
+        try:
+            if pd.isna(x):
+                return ""
+        except Exception:
+            pass
         s = str(x).strip()
         if s.endswith(".0"):
             s = s[:-2]
@@ -25039,26 +25058,6 @@ with tab14:
         except Exception:
             return 0.0
 
-    def _num_series(df, col):
-        if df is None or df.empty or not col or col not in df.columns:
-            return pd.Series(dtype=float)
-        return pd.to_numeric(
-            df[col].astype(str)
-            .str.replace("₹", "", regex=False)
-            .str.replace(",", "", regex=False)
-            .str.strip(),
-            errors="coerce"
-        ).fillna(0.0)
-
-    def _fmt_money(x):
-        return f"₹ {_to_num(x):,.0f}"
-
-    def _fmt_pct(x):
-        try:
-            return f"{float(x):.1f}%"
-        except Exception:
-            return "0.0%"
-
     def _pct(num, den):
         den = _to_num(den)
         num = _to_num(num)
@@ -25066,11 +25065,16 @@ with tab14:
             return 0.0
         return (num / den) * 100.0
 
+    def _fmt_pct(x):
+        try:
+            return f"{float(x):.1f}%"
+        except Exception:
+            return "0.0%"
+
     def _get_current_user_email():
-        # Works with most OTP/login implementations.
         for key in [
-            "user_email",
             "pv_user_email",
+            "user_email",
             "auth_email",
             "logged_in_email",
             "email",
@@ -25090,15 +25094,25 @@ with tab14:
 
         return ""
 
+    def _parse_date_series(series):
+        return pd.to_datetime(series, errors="coerce", dayfirst=True)
+
     def _month_start_from_date(dt):
         if pd.isna(dt):
             return None
         return datetime.date(int(dt.year), int(dt.month), 1)
 
-    def _parse_date_series(series):
-        return pd.to_datetime(series, errors="coerce", dayfirst=True)
+    def _num_series(df, col):
+        if df is None or df.empty or not col or col not in df.columns:
+            return pd.Series(dtype=float)
+        return pd.to_numeric(
+            df[col].astype(str)
+            .str.replace("₹", "", regex=False)
+            .str.replace(",", "", regex=False)
+            .str.strip(),
+            errors="coerce"
+        ).fillna(0.0)
 
-    @st.cache_data(ttl=180, show_spinner=False)
     def _sb_select_all(table_name: str, order_col: str = "id") -> list[dict]:
         rows = []
         page_size = 1000
@@ -25132,8 +25146,30 @@ with tab14:
             st.warning(f"Could not load `{table_name}`: {e}")
             return pd.DataFrame()
 
-    def _insert_sales_target(row: dict):
-        return supabase_client.table(SALES_TARGET_TABLE).insert(row).execute()
+    def _insert_sales_targets(rows: list[dict]):
+        return supabase_client.table(SALES_TARGET_TABLE).insert(rows).execute()
+
+    def _style_table(df):
+        return (
+            df.style
+            .set_table_styles([
+                {
+                    "selector": "th",
+                    "props": [
+                        ("background-color", "#2563eb"),
+                        ("color", "white"),
+                        ("font-weight", "900"),
+                        ("text-align", "center"),
+                    ],
+                },
+                {
+                    "selector": "td",
+                    "props": [
+                        ("text-align", "center"),
+                    ],
+                },
+            ])
+        )
 
     # ============================================================
     # CURRENT MONTH
@@ -25148,113 +25184,6 @@ with tab14:
     if not current_user_email:
         st.error("User email not found in session. Please make sure OTP login stores the logged-in email.")
         st.stop()
-
-    # Optional email-to-executive mapping.
-    # Update this if you want the dropdown to auto-select the correct Sales Executive.
-    EMAIL_TO_EXECUTIVE = {
-        "ashumarch15@gmail.com": "Ashutosh S",
-        "tejasp1699@gmail.com": "Tejas P",
-        "komal.lohiajaingroup@gmail.com": "Komal K",
-        # Add or change these as needed:
-        # "gr8gourav@gmail.com": "Sailee D",
-        # "kumarjain0502@gmail.com": "Management",
-        # "kumarj2002@gmail.com": "SK",
-    }
-
-    # ============================================================
-    # LOAD DATA
-    # ============================================================
-    if st.button("🔄 Refresh Target Data", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-
-    targets_df = _load_table(SALES_TARGET_TABLE)
-    bookings_df = _load_table(BOOKINGS_TABLE)
-
-    # ============================================================
-    # PREPARE BOOKINGS DATA — USE BOOKING DATE, NOT MONTH COLUMN
-    # ============================================================
-    b_date_col = _col(bookings_df, "booking_date", "date", "Date")
-    b_sales_exec_col = _col(bookings_df, "sales_executive", "Sales Executive")
-    b_agreement_cost_col = _col(bookings_df, "agreement_cost", "Agreement Cost")
-    b_rate_col = _col(bookings_df, "rate", "Rate")
-
-    if not bookings_df.empty:
-        bookings_work = bookings_df.copy()
-
-        if b_date_col:
-            bookings_work["_BookingDate"] = _parse_date_series(bookings_work[b_date_col])
-            bookings_work["_MonthStart"] = bookings_work["_BookingDate"].apply(_month_start_from_date)
-            bookings_work["_MonthStartStr"] = bookings_work["_MonthStart"].astype(str)
-            bookings_work["_MonthLabel"] = bookings_work["_BookingDate"].dt.strftime("%B %y").str.upper()
-        else:
-            bookings_work["_BookingDate"] = pd.NaT
-            bookings_work["_MonthStart"] = None
-            bookings_work["_MonthStartStr"] = ""
-            bookings_work["_MonthLabel"] = "UNKNOWN"
-
-        if b_sales_exec_col:
-            bookings_work["_SalesExecutive"] = bookings_work[b_sales_exec_col].fillna("").astype(str).str.strip()
-        else:
-            bookings_work["_SalesExecutive"] = ""
-
-        bookings_work["_AgreementCostNum"] = _num_series(bookings_work, b_agreement_cost_col) if b_agreement_cost_col else 0.0
-        bookings_work["_RateNum"] = _num_series(bookings_work, b_rate_col) if b_rate_col else 0.0
-
-        bookings_work = bookings_work[
-            bookings_work["_MonthStart"].notna() &
-            bookings_work["_SalesExecutive"].ne("")
-        ].copy()
-    else:
-        bookings_work = pd.DataFrame()
-
-    # ============================================================
-    # SALES EXECUTIVE OPTIONS
-    # ============================================================
-    default_sales_execs = [
-        "Tejas P",
-        "Ashutosh S",
-        "Komal K",
-        "Sailee D",
-        "Harshal S",
-        "Alok R",
-        "Sagar B",
-        "Advait M",
-    ]
-
-    execs_from_bookings = []
-    if not bookings_work.empty:
-        execs_from_bookings = (
-            bookings_work["_SalesExecutive"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .replace("", pd.NA)
-            .dropna()
-            .unique()
-            .tolist()
-        )
-
-    execs_from_targets = []
-    if not targets_df.empty and "sales_executive" in targets_df.columns:
-        execs_from_targets = (
-            targets_df["sales_executive"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .replace("", pd.NA)
-            .dropna()
-            .unique()
-            .tolist()
-        )
-
-    sales_exec_options = sorted(set(default_sales_execs + execs_from_bookings + execs_from_targets))
-
-    mapped_exec = EMAIL_TO_EXECUTIVE.get(current_user_email, "")
-
-    if mapped_exec and mapped_exec not in sales_exec_options:
-        sales_exec_options.append(mapped_exec)
-        sales_exec_options = sorted(set(sales_exec_options))
 
     # ============================================================
     # CSS
@@ -25279,7 +25208,7 @@ with tab14:
             border-radius: 16px;
             padding: 14px;
             text-align: center;
-            min-height: 112px;
+            min-height: 105px;
             box-shadow: 0 8px 18px rgba(15,23,42,.06);
             margin-bottom: 12px;
         }
@@ -25328,285 +25257,249 @@ with tab14:
             unsafe_allow_html=True
         )
 
-    def style_table(df):
-        return (
-            df.style
-            .set_table_styles([
-                {
-                    "selector": "th",
-                    "props": [
-                        ("background-color", "#2563eb"),
-                        ("color", "white"),
-                        ("font-weight", "900"),
-                        ("text-align", "center"),
-                    ],
-                },
-                {
-                    "selector": "td",
-                    "props": [
-                        ("text-align", "center"),
-                    ],
-                },
-            ])
-        )
+    # ============================================================
+    # LOAD DATA
+    # ============================================================
+    if st.button("🔄 Refresh Target Data", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    targets_df = _load_table(SALES_TARGET_TABLE)
+    bookings_df = _load_table(BOOKINGS_TABLE)
 
     # ============================================================
-    # SECTION 1 — SET CURRENT MONTH TARGET
+    # PREPARE BOOKINGS DATA — USE BOOKING DATE, NOT MONTH COLUMN
     # ============================================================
-    section_card(f"🎯 Set Target for {current_month_label}")
+    b_date_col = _col(bookings_df, "booking_date", "date", "Date")
+    b_sales_exec_col = _col(bookings_df, "sales_executive", "Sales Executive")
 
-    top1, top2 = st.columns([2, 1])
-    with top1:
-        if mapped_exec:
-            selected_exec = st.selectbox(
-                "Sales Executive",
-                options=sales_exec_options,
-                index=sales_exec_options.index(mapped_exec) if mapped_exec in sales_exec_options else 0,
-                disabled=True,
-                key="target_selected_exec_locked"
-            )
-            st.caption(f"Logged in as: {current_user_email}")
+    if not bookings_df.empty:
+        bookings_work = bookings_df.copy()
+
+        if b_date_col:
+            bookings_work["_BookingDate"] = _parse_date_series(bookings_work[b_date_col])
+            bookings_work["_MonthStart"] = bookings_work["_BookingDate"].apply(_month_start_from_date)
+            bookings_work["_MonthStartStr"] = bookings_work["_MonthStart"].astype(str)
         else:
-            selected_exec = st.selectbox(
-                "Sales Executive",
-                options=sales_exec_options,
-                key="target_selected_exec"
-            )
-            st.caption(f"Logged in as: {current_user_email}. Email is not mapped, so selection is open.")
+            bookings_work["_BookingDate"] = pd.NaT
+            bookings_work["_MonthStart"] = None
+            bookings_work["_MonthStartStr"] = ""
 
-    with top2:
-        st.metric("Current Month", current_month_label)
+        if b_sales_exec_col:
+            bookings_work["_SalesExecutive"] = bookings_work[b_sales_exec_col].fillna("").astype(str).str.strip()
+        else:
+            bookings_work["_SalesExecutive"] = ""
 
-    current_target_row = pd.DataFrame()
+        bookings_work = bookings_work[
+            bookings_work["_MonthStart"].notna() &
+            bookings_work["_SalesExecutive"].ne("")
+        ].copy()
+    else:
+        bookings_work = pd.DataFrame()
 
+    # ============================================================
+    # CURRENT MONTH TARGET ROWS
+    # ============================================================
     if not targets_df.empty:
         tdf = targets_df.copy()
-        if "month_start" in tdf.columns:
-            tdf["month_start"] = tdf["month_start"].astype(str)
-        if "sales_executive" in tdf.columns:
-            tdf["sales_executive"] = tdf["sales_executive"].fillna("").astype(str).str.strip()
 
-        current_target_row = tdf[
-            (tdf["month_start"] == current_month_start_str) &
-            (tdf["sales_executive"].str.casefold() == selected_exec.casefold())
-        ].copy()
+        if "month_start" not in tdf.columns:
+            tdf["month_start"] = ""
 
-    target_locked = not current_target_row.empty
+        if "sales_executive" not in tdf.columns:
+            tdf["sales_executive"] = ""
 
-    if target_locked:
-        row = current_target_row.iloc[0]
+        if "target_bookings" not in tdf.columns:
+            tdf["target_bookings"] = 0
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            kpi_card("Target Bookings", f"{int(_to_num(row.get('target_bookings', 0))):,}", "Locked for this month", "target-blue")
-        with c2:
-            kpi_card("Target Agreement Value", _fmt_money(row.get("target_agreement_value", 0)), "Locked", "target-green")
-        with c3:
-            kpi_card("Target PSF", f"₹ {_to_num(row.get('target_rate_psf', 0)):,.0f}", "Optional target", "target-amber")
-        with c4:
-            locked_at = _safe_str(row.get("locked_at", ""))
-            kpi_card("Status", "Locked", locked_at, "target-rose")
+        tdf["month_start"] = tdf["month_start"].astype(str)
+        tdf["sales_executive"] = tdf["sales_executive"].fillna("").astype(str).str.strip()
+        tdf["target_bookings"] = pd.to_numeric(tdf["target_bookings"], errors="coerce").fillna(0).astype(int)
 
-        st.info("This month’s target is already submitted. It cannot be edited now. Next month, the form will unlock automatically.")
-
-        with st.expander("View locked target details", expanded=False):
-            show_cols = [
-                c for c in [
-                    "month", "sales_executive", "target_bookings",
-                    "target_agreement_value", "target_rate_psf",
-                    "remarks", "set_by_email", "locked_at"
-                ] if c in current_target_row.columns
-            ]
-            st.dataframe(
-                style_table(current_target_row[show_cols]),
-                use_container_width=True,
-                hide_index=True
-            )
-
+        current_targets_df = tdf[tdf["month_start"] == current_month_start_str].copy()
     else:
-        with st.form("sales_target_form", clear_on_submit=False):
-            st.markdown("### Enter this month’s target")
+        current_targets_df = pd.DataFrame()
 
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                target_bookings = st.number_input(
-                    "Target Bookings *",
-                    min_value=0,
-                    step=1,
-                    value=0,
-                    key="target_bookings_input"
-                )
-            with c2:
-                target_agreement_value = st.number_input(
-                    "Target Agreement Value (₹)",
-                    min_value=0.0,
-                    step=100000.0,
-                    value=0.0,
-                    key="target_agreement_value_input"
-                )
-            with c3:
-                target_rate_psf = st.number_input(
-                    "Target Avg PSF (₹)",
-                    min_value=0.0,
-                    step=50.0,
-                    value=0.0,
-                    key="target_rate_psf_input"
-                )
-
-            remarks = st.text_area(
-                "Remarks",
-                placeholder="Optional target notes",
-                key="target_remarks_input"
-            )
-
-            st.warning("Once submitted, this target will be locked and cannot be changed for this month.")
-
-            submit_target = st.form_submit_button("🔒 Submit & Lock Target", use_container_width=True)
-
-        if submit_target:
-            if not selected_exec:
-                st.error("Please select Sales Executive.")
-            elif target_bookings <= 0 and target_agreement_value <= 0:
-                st.error("Please enter at least Target Bookings or Target Agreement Value.")
-            else:
-                row = {
-                    "month_start": current_month_start_str,
-                    "month": current_month_label,
-                    "sales_executive": selected_exec,
-                    "target_bookings": int(target_bookings),
-                    "target_agreement_value": float(target_agreement_value) if target_agreement_value else None,
-                    "target_rate_psf": float(target_rate_psf) if target_rate_psf else None,
-                    "remarks": remarks.strip() if remarks else None,
-                    "set_by_email": current_user_email,
-                    "locked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                }
-
-                try:
-                    _insert_sales_target(row)
-                    st.cache_data.clear()
-                    st.success("✅ Target submitted and locked for this month.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Could not save target. It may already be locked for this month. Error: {e}")
+    month_is_locked = not current_targets_df.empty
 
     # ============================================================
-    # SECTION 2 — CURRENT MONTH TARGET VS ACHIEVED
+    # FORM — ALL SALES EXECUTIVES IN ONE PLACE
+    # ============================================================
+    section_card(f"🎯 Booking Targets for {current_month_label}")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        kpi_card("Current Month", current_month_label, "Target month", "target-blue")
+    with c2:
+        kpi_card("Logged In User", current_user_email, "Target submitted by", "target-green")
+    with c3:
+        kpi_card("Status", "Locked" if month_is_locked else "Open", "Unlocks automatically next month", "target-rose" if month_is_locked else "target-amber")
+
+    if month_is_locked:
+        st.info("Targets for this month are already submitted. They are locked until next month.")
+
+        locked_display = current_targets_df.copy()
+
+        keep_cols = [
+            c for c in [
+                "month",
+                "month_start",
+                "sales_executive",
+                "target_bookings",
+                "set_by_email",
+                "locked_at",
+            ] if c in locked_display.columns
+        ]
+
+        locked_display = locked_display[keep_cols].copy()
+        locked_display = locked_display.rename(columns={
+            "month": "Month",
+            "month_start": "Month Start",
+            "sales_executive": "Sales Executive",
+            "target_bookings": "Target Bookings",
+            "set_by_email": "Set By",
+            "locked_at": "Locked At",
+        })
+
+        st.dataframe(
+            _style_table(locked_display),
+            use_container_width=True,
+            hide_index=True
+        )
+
+    else:
+        st.warning("Fill booking target count for each Sales Executive and submit once. After submission, this month will be locked.")
+
+        with st.form("sales_exec_monthly_targets_form", clear_on_submit=False):
+            st.markdown("### Enter Booking Count Target")
+
+            target_values = {}
+
+            for exec_name in SALES_EXECUTIVES:
+                col_name, col_target = st.columns([2, 1])
+
+                with col_name:
+                    st.markdown(f"**{exec_name}**")
+
+                with col_target:
+                    target_values[exec_name] = st.number_input(
+                        "Booking Count Target",
+                        min_value=0,
+                        step=1,
+                        value=0,
+                        key=f"target_booking_count_{exec_name.replace(' ', '_').lower()}",
+                        label_visibility="collapsed"
+                    )
+
+            submit_targets = st.form_submit_button(
+                "🔒 Submit Monthly Targets",
+                use_container_width=True
+            )
+
+        if submit_targets:
+            rows_to_insert = []
+
+            for exec_name in SALES_EXECUTIVES:
+                target_count = int(target_values.get(exec_name, 0) or 0)
+
+                rows_to_insert.append({
+                    "month_start": current_month_start_str,
+                    "month": current_month_label,
+                    "sales_executive": exec_name,
+                    "target_bookings": target_count,
+                    "set_by_email": current_user_email,
+                    "locked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                })
+
+            try:
+                _insert_sales_targets(rows_to_insert)
+                st.success("✅ Monthly targets submitted and locked successfully.")
+                st.cache_data.clear()
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Could not save targets. They may already be submitted for this month. Error: {e}")
+
+    # ============================================================
+    # TARGET VS ACHIEVED — CURRENT MONTH
     # ============================================================
     section_card(f"📊 {current_month_label} Target vs Achieved")
 
-    if not targets_df.empty:
-        current_targets = targets_df.copy()
-
-        if "month_start" in current_targets.columns:
-            current_targets["month_start"] = current_targets["month_start"].astype(str)
-        else:
-            current_targets["month_start"] = ""
-
-        current_targets = current_targets[current_targets["month_start"] == current_month_start_str].copy()
-
-        if "sales_executive" not in current_targets.columns:
-            current_targets["sales_executive"] = ""
-
-        current_targets["sales_executive"] = current_targets["sales_executive"].fillna("").astype(str).str.strip()
-        current_targets["target_bookings"] = pd.to_numeric(current_targets.get("target_bookings", 0), errors="coerce").fillna(0).astype(int)
-        current_targets["target_agreement_value"] = pd.to_numeric(current_targets.get("target_agreement_value", 0), errors="coerce").fillna(0.0)
-        current_targets["target_rate_psf"] = pd.to_numeric(current_targets.get("target_rate_psf", 0), errors="coerce").fillna(0.0)
+    if current_targets_df.empty:
+        st.info("No target data available yet for this month.")
     else:
-        current_targets = pd.DataFrame()
+        if not bookings_work.empty:
+            current_actuals = bookings_work[bookings_work["_MonthStartStr"] == current_month_start_str].copy()
 
-    if not bookings_work.empty:
-        current_actuals = bookings_work[bookings_work["_MonthStartStr"] == current_month_start_str].copy()
-
-        actual_summary = (
-            current_actuals
-            .groupby("_SalesExecutive", as_index=False)
-            .agg(
-                Achieved_Bookings=("_SalesExecutive", "size"),
-                Achieved_Agreement_Value=("_AgreementCostNum", "sum"),
-                Achieved_Avg_PSF=("_RateNum", "mean"),
+            actual_summary = (
+                current_actuals
+                .groupby("_SalesExecutive", as_index=False)
+                .size()
+                .rename(columns={
+                    "_SalesExecutive": "sales_executive",
+                    "size": "achieved_bookings"
+                })
             )
-            .rename(columns={"_SalesExecutive": "sales_executive"})
-        )
-    else:
-        actual_summary = pd.DataFrame(columns=[
-            "sales_executive", "Achieved_Bookings",
-            "Achieved_Agreement_Value", "Achieved_Avg_PSF"
-        ])
+        else:
+            actual_summary = pd.DataFrame(columns=["sales_executive", "achieved_bookings"])
 
-    if current_targets.empty:
-        st.info("No targets submitted for this month yet.")
-    else:
-        current_perf = current_targets.merge(
+        perf_df = current_targets_df.merge(
             actual_summary,
             on="sales_executive",
             how="left"
         )
 
-        for c in ["Achieved_Bookings", "Achieved_Agreement_Value", "Achieved_Avg_PSF"]:
-            if c not in current_perf.columns:
-                current_perf[c] = 0
+        perf_df["achieved_bookings"] = pd.to_numeric(
+            perf_df.get("achieved_bookings", 0),
+            errors="coerce"
+        ).fillna(0).astype(int)
 
-        current_perf["Achieved_Bookings"] = pd.to_numeric(current_perf["Achieved_Bookings"], errors="coerce").fillna(0).astype(int)
-        current_perf["Achieved_Agreement_Value"] = pd.to_numeric(current_perf["Achieved_Agreement_Value"], errors="coerce").fillna(0.0)
-        current_perf["Achieved_Avg_PSF"] = pd.to_numeric(current_perf["Achieved_Avg_PSF"], errors="coerce").fillna(0.0)
+        perf_df["target_bookings"] = pd.to_numeric(
+            perf_df.get("target_bookings", 0),
+            errors="coerce"
+        ).fillna(0).astype(int)
 
-        current_perf["Booking Achievement %"] = current_perf.apply(
-            lambda r: _pct(r["Achieved_Bookings"], r["target_bookings"]),
+        perf_df["pending_bookings"] = (perf_df["target_bookings"] - perf_df["achieved_bookings"]).clip(lower=0)
+
+        perf_df["achievement_percent"] = perf_df.apply(
+            lambda r: _pct(r["achieved_bookings"], r["target_bookings"]),
             axis=1
         )
-        current_perf["Agreement Value Achievement %"] = current_perf.apply(
-            lambda r: _pct(r["Achieved_Agreement_Value"], r["target_agreement_value"]),
-            axis=1
-        )
 
-        display_perf = current_perf[[
-            "month",
+        display_df = perf_df[[
             "sales_executive",
             "target_bookings",
-            "Achieved_Bookings",
-            "Booking Achievement %",
-            "target_agreement_value",
-            "Achieved_Agreement_Value",
-            "Agreement Value Achievement %",
-            "target_rate_psf",
-            "Achieved_Avg_PSF",
+            "achieved_bookings",
+            "pending_bookings",
+            "achievement_percent",
         ]].copy()
 
-        display_perf = display_perf.rename(columns={
-            "month": "Month",
+        display_df = display_df.rename(columns={
             "sales_executive": "Sales Executive",
             "target_bookings": "Target Bookings",
-            "Achieved_Bookings": "Achieved Bookings",
-            "target_agreement_value": "Target Agreement Value",
-            "Achieved_Agreement_Value": "Achieved Agreement Value",
-            "target_rate_psf": "Target PSF",
-            "Achieved_Avg_PSF": "Achieved Avg PSF",
+            "achieved_bookings": "Achieved Bookings",
+            "pending_bookings": "Pending Bookings",
+            "achievement_percent": "Achievement %",
         })
 
-        money_cols = ["Target Agreement Value", "Achieved Agreement Value"]
-        pct_cols = ["Booking Achievement %", "Agreement Value Achievement %"]
+        display_df["Achievement %"] = display_df["Achievement %"].apply(_fmt_pct)
 
-        display_for_table = display_perf.copy()
-        for c in money_cols:
-            display_for_table[c] = display_for_table[c].apply(_fmt_money)
-        for c in pct_cols:
-            display_for_table[c] = display_for_table[c].apply(_fmt_pct)
-        display_for_table["Target PSF"] = display_for_table["Target PSF"].apply(lambda x: f"₹ {_to_num(x):,.0f}")
-        display_for_table["Achieved Avg PSF"] = display_for_table["Achieved Avg PSF"].apply(lambda x: f"₹ {_to_num(x):,.0f}")
+        st.dataframe(
+            _style_table(display_df),
+            use_container_width=True,
+            hide_index=True
+        )
 
-        st.dataframe(style_table(display_for_table), use_container_width=True, hide_index=True)
-
-        # Chart with values
-        chart_df = current_perf[[
+        chart_df = perf_df[[
             "sales_executive",
             "target_bookings",
-            "Achieved_Bookings",
+            "achieved_bookings",
         ]].copy()
 
         chart_df = chart_df.rename(columns={
             "sales_executive": "Sales Executive",
             "target_bookings": "Target",
-            "Achieved_Bookings": "Achieved",
+            "achieved_bookings": "Achieved",
         })
 
         chart_long = chart_df.melt(
@@ -25619,7 +25512,10 @@ with tab14:
             x=alt.X("Sales Executive:N", title="Sales Executive"),
             xOffset=alt.XOffset("Metric:N"),
             y=alt.Y("Bookings:Q", title="Bookings"),
-            color=alt.Color("Metric:N", scale=alt.Scale(range=["#2563eb", "#10b981"])),
+            color=alt.Color(
+                "Metric:N",
+                scale=alt.Scale(range=["#2563eb", "#10b981"])
+            ),
             tooltip=[
                 "Sales Executive:N",
                 "Metric:N",
@@ -25627,7 +25523,7 @@ with tab14:
             ]
         ).properties(
             height=360,
-            title="Current Month — Target vs Achieved Bookings"
+            title="Target vs Achieved Bookings"
         )
 
         labels = alt.Chart(chart_long).mark_text(
@@ -25645,99 +25541,43 @@ with tab14:
         st.altair_chart(bar + labels, use_container_width=True)
 
     # ============================================================
-    # SECTION 3 — HISTORY
+    # HISTORY
     # ============================================================
-    section_card("📅 Month-wise Sales Executive Target History")
+    section_card("📅 Target History")
 
     if targets_df.empty:
-        st.info("No target history available yet.")
+        st.info("No target history available.")
     else:
-        hist = targets_df.copy()
+        history_df = targets_df.copy()
 
-        if "month_start" in hist.columns:
-            hist["_MonthStart"] = pd.to_datetime(hist["month_start"], errors="coerce")
-            hist["_MonthSort"] = hist["_MonthStart"].dt.strftime("%Y-%m")
-        else:
-            hist["_MonthStart"] = pd.NaT
-            hist["_MonthSort"] = ""
+        keep_cols = [
+            c for c in [
+                "month",
+                "month_start",
+                "sales_executive",
+                "target_bookings",
+                "set_by_email",
+                "locked_at",
+            ] if c in history_df.columns
+        ]
 
-        hist["sales_executive"] = hist["sales_executive"].fillna("").astype(str).str.strip()
-        hist["target_bookings"] = pd.to_numeric(hist.get("target_bookings", 0), errors="coerce").fillna(0).astype(int)
-        hist["target_agreement_value"] = pd.to_numeric(hist.get("target_agreement_value", 0), errors="coerce").fillna(0.0)
-        hist["target_rate_psf"] = pd.to_numeric(hist.get("target_rate_psf", 0), errors="coerce").fillna(0.0)
-
-        if not bookings_work.empty:
-            all_actuals = (
-                bookings_work
-                .groupby(["_MonthStartStr", "_SalesExecutive"], as_index=False)
-                .agg(
-                    Achieved_Bookings=("_SalesExecutive", "size"),
-                    Achieved_Agreement_Value=("_AgreementCostNum", "sum"),
-                    Achieved_Avg_PSF=("_RateNum", "mean"),
-                )
-                .rename(columns={
-                    "_MonthStartStr": "month_start",
-                    "_SalesExecutive": "sales_executive",
-                })
-            )
-        else:
-            all_actuals = pd.DataFrame(columns=[
-                "month_start", "sales_executive",
-                "Achieved_Bookings", "Achieved_Agreement_Value", "Achieved_Avg_PSF"
-            ])
-
-        hist["month_start"] = hist["month_start"].astype(str)
-
-        hist_perf = hist.merge(
-            all_actuals,
-            on=["month_start", "sales_executive"],
-            how="left"
-        )
-
-        for c in ["Achieved_Bookings", "Achieved_Agreement_Value", "Achieved_Avg_PSF"]:
-            hist_perf[c] = pd.to_numeric(hist_perf.get(c, 0), errors="coerce").fillna(0.0)
-
-        hist_perf["Booking Achievement %"] = hist_perf.apply(
-            lambda r: _pct(r["Achieved_Bookings"], r["target_bookings"]),
-            axis=1
-        )
-
-        hist_display = hist_perf[[
-            "month",
-            "sales_executive",
-            "target_bookings",
-            "Achieved_Bookings",
-            "Booking Achievement %",
-            "target_agreement_value",
-            "Achieved_Agreement_Value",
-            "target_rate_psf",
-            "Achieved_Avg_PSF",
-            "set_by_email",
-            "locked_at",
-        ]].copy()
-
-        hist_display = hist_display.rename(columns={
+        history_df = history_df[keep_cols].copy()
+        history_df = history_df.rename(columns={
             "month": "Month",
+            "month_start": "Month Start",
             "sales_executive": "Sales Executive",
             "target_bookings": "Target Bookings",
-            "Achieved_Bookings": "Achieved Bookings",
-            "target_agreement_value": "Target Agreement Value",
-            "Achieved_Agreement_Value": "Achieved Agreement Value",
-            "target_rate_psf": "Target PSF",
-            "Achieved_Avg_PSF": "Achieved Avg PSF",
-            "set_by_email": "Set By Email",
+            "set_by_email": "Set By",
             "locked_at": "Locked At",
         })
 
-        hist_display["Booking Achievement %"] = hist_display["Booking Achievement %"].apply(_fmt_pct)
-        hist_display["Target Agreement Value"] = hist_display["Target Agreement Value"].apply(_fmt_money)
-        hist_display["Achieved Agreement Value"] = hist_display["Achieved Agreement Value"].apply(_fmt_money)
-        hist_display["Target PSF"] = hist_display["Target PSF"].apply(lambda x: f"₹ {_to_num(x):,.0f}")
-        hist_display["Achieved Avg PSF"] = hist_display["Achieved Avg PSF"].apply(lambda x: f"₹ {_to_num(x):,.0f}")
+        st.dataframe(
+            _style_table(history_df),
+            use_container_width=True,
+            hide_index=True
+        )
 
-        st.dataframe(style_table(hist_display), use_container_width=True, hide_index=True)
-
-        csv_bytes = hist_display.to_csv(index=False).encode("utf-8")
+        csv_bytes = history_df.to_csv(index=False).encode("utf-8")
         st.download_button(
             "⬇️ Download Target History CSV",
             data=csv_bytes,
