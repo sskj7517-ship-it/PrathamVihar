@@ -25302,6 +25302,7 @@ with tab15:
     import re
     import io
     import ssl
+    import math
     import smtplib
     import datetime
     from html import escape
@@ -25315,9 +25316,7 @@ with tab15:
     import streamlit as st
 
     st.header("🏢 Complete Site Summary")
-    st.caption(
-        "Detailed site-wide dashboard connected to Supabase tables: bookings, daily visits, marketing, holds, cashflow, and sales targets."
-    )
+    st.caption("Complete connected summary from bookings, daily visits, marketing, holds, cashflow, and sales target tables.")
 
     # ============================================================
     # SUPABASE CONNECTION
@@ -25341,7 +25340,11 @@ with tab15:
     BOOKING_START_DATE = pd.Timestamp("2025-04-01")
     TODAY = pd.Timestamp.today().normalize()
     THIS_MONTH_KEY = TODAY.strftime("%Y-%m")
-    NEXT_MONTH_KEY = (TODAY + pd.offsets.MonthBegin(1)).strftime("%Y-%m")
+    THIS_MONTH_LABEL = TODAY.strftime("%B %y").upper()
+
+    NEXT_MONTH_DT = TODAY + pd.DateOffset(months=1)
+    NEXT_MONTH_KEY = NEXT_MONTH_DT.strftime("%Y-%m")
+    NEXT_MONTH_LABEL = NEXT_MONTH_DT.strftime("%B %y").upper()
 
     # ============================================================
     # BASIC HELPERS
@@ -25420,7 +25423,7 @@ with tab15:
     def _fmt_psf(x):
         if _to_num(x) <= 0:
             return "—"
-        return f"₹{_to_num(x):,.0f}/sqft"
+        return f"₹ {_to_num(x):,.0f}/sqft"
 
     def _fmt_pct(x):
         try:
@@ -25509,18 +25512,15 @@ with tab15:
 
         return "9999-99", "UNKNOWN"
 
-    def _month_label_from_key(month_key: str) -> str:
-        try:
-            return pd.Period(month_key, freq="M").to_timestamp().strftime("%B %y").upper()
-        except Exception:
-            return str(month_key or "").upper()
-
     def _clean_email_list(v):
         if isinstance(v, str):
             return [x.strip() for x in v.split(",") if x.strip()]
         if isinstance(v, list):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
+
+    def _exec_key(name):
+        return re.sub(r"[^a-z0-9]+", "_", str(name).strip().lower()).strip("_")
 
     # ============================================================
     # SUPABASE READ HELPERS
@@ -25540,18 +25540,7 @@ with tab15:
                 except Exception:
                     pass
 
-            try:
-                res = query.range(start, start + page_size - 1).execute()
-            except Exception:
-                # Fallback for tables without id/order column
-                res = (
-                    supabase_client
-                    .table(table_name)
-                    .select("*")
-                    .range(start, start + page_size - 1)
-                    .execute()
-                )
-
+            res = query.range(start, start + page_size - 1).execute()
             batch = getattr(res, "data", None) or []
             rows.extend(batch)
 
@@ -25562,9 +25551,9 @@ with tab15:
 
         return rows
 
-    def _load_table(table_name: str, order_col: str = "id") -> pd.DataFrame:
+    def _load_table(table_name: str) -> pd.DataFrame:
         try:
-            rows = _sb_select_all(table_name, order_col=order_col)
+            rows = _sb_select_all(table_name)
             df = pd.DataFrame(rows)
             if not df.empty:
                 df.columns = [str(c).strip() for c in df.columns]
@@ -25590,19 +25579,19 @@ with tab15:
             background: linear-gradient(135deg,#2563eb 0%,#7c3aed 100%);
             color: white;
             border-radius: 22px;
-            padding: 24px 18px;
+            padding: 22px 18px;
             text-align: center;
-            margin: 34px 0 18px 0;
+            margin: 32px 0 18px 0;
             box-shadow: 0 12px 28px rgba(37,99,235,.22);
         }
         .ss-section-card h2{
             margin: 0;
-            font-size: 28px;
+            font-size: 27px;
             font-weight: 950;
             letter-spacing: .01em;
         }
         .ss-section-card p{
-            margin: 8px 0 0 0;
+            margin: 7px 0 0 0;
             font-size: 13px;
             font-weight: 700;
             opacity: .92;
@@ -25630,7 +25619,7 @@ with tab15:
         }
         .ss-kpi p{
             margin: 0;
-            font-size: 25px;
+            font-size: 26px;
             line-height: 1.08;
             font-weight: 900;
             color: #111827;
@@ -25639,8 +25628,8 @@ with tab15:
         .ss-kpi span{
             display: block;
             margin-top: 8px;
-            font-size: 11.5px;
-            line-height: 1.25;
+            font-size: 12px;
+            line-height: 1.2;
             font-weight: 700;
             color: rgba(49,51,63,0.65);
             text-align: center;
@@ -25683,14 +25672,6 @@ with tab15:
         }
         table.ss-table tr:hover{
             background:#eef2ff;
-        }
-
-        .target-card{
-            border:1px solid #e2e8f0;
-            border-radius:16px;
-            padding:14px 16px;
-            margin:10px 0;
-            box-shadow:0 4px 14px rgba(15,23,42,.05);
         }
         </style>
         """,
@@ -25843,7 +25824,7 @@ with tab15:
     inventory_master_df = _build_inventory_master()
 
     # ============================================================
-    # BOOKINGS PREP — MONTH FROM BOOKING DATE ONLY
+    # BOOKING PREP — MONTH FROM BOOKING DATE ONLY
     # ============================================================
     b_customer_col = _col(bookings_df, "customer_name", "Customer Name")
     b_wing_col = _col(bookings_df, "wing", "Wing")
@@ -25853,7 +25834,7 @@ with tab15:
     b_agreement_cost_col = _col(bookings_df, "agreement_cost", "Agreement Cost")
     b_sales_exec_col = _col(bookings_df, "sales_executive", "Sales Executive")
     b_lead_col = _col(bookings_df, "lead_type", "Lead Type")
-    b_date_col = _col(bookings_df, "booking_date", "date", "Date")
+    b_date_col = _col(bookings_df, "date", "booking_date", "Date")
     b_stamp_col = _col(bookings_df, "stamp_duty", "Stamp Duty")
     b_agreement_done_col = _col(bookings_df, "agreement_done", "Agreement Done")
     b_received_col = _col(bookings_df, "received_amount", "Received Amount")
@@ -25873,7 +25854,7 @@ with tab15:
             ].copy()
         else:
             bookings_work["_BookingDateObj"] = pd.NaT
-            st.warning("Booking date column not found. Month-wise sections cannot be generated correctly.")
+            st.warning("Booking date column not found. Month-wise booking section cannot be generated correctly.")
 
         bookings_work["_WingNorm"] = bookings_work[b_wing_col].apply(_norm_wing) if b_wing_col else ""
         bookings_work["_FlatNorm"] = bookings_work[b_flat_col].apply(_norm_flat) if b_flat_col else ""
@@ -25918,17 +25899,6 @@ with tab15:
         )
         bookings_work["_PSF"] = bookings_work["_RateNum"]
         bookings_work.loc[bookings_work["_PSF"] <= 0, "_PSF"] = computed_psf
-
-        def _type_for_appreciation(v):
-            s = _safe_str(v).upper().replace(" ", "")
-            if "1BHK" in s:
-                return "1 BHK"
-            if "2BHK" in s:
-                return "2 BHK"
-            return ""
-
-        bookings_work["_TypeForAppreciation"] = bookings_work["_TypeNorm"].apply(_type_for_appreciation)
-
     else:
         bookings_work = pd.DataFrame()
 
@@ -25951,77 +25921,86 @@ with tab15:
     avg_visits_for_booking = float(bookings_work.loc[bookings_work["_VisitCountNum"] > 0, "_VisitCountNum"].mean()) if not bookings_work.empty else 0.0
     avg_conversion_days = float(bookings_work.loc[bookings_work["_ConversionDaysNum"] > 0, "_ConversionDaysNum"].mean()) if not bookings_work.empty else 0.0
 
-    avg_booking_per_month = 0.0
     if not bookings_work.empty:
-        valid_month_count = bookings_work["_MonthSort"].replace("9999-99", pd.NA).dropna().nunique()
-        avg_booking_per_month = total_bookings / valid_month_count if valid_month_count else 0.0
+        avg_conversion_1bhk = float(
+            bookings_work.loc[
+                bookings_work["_TypeNorm"].str.contains("1", na=False) &
+                (bookings_work["_ConversionDaysNum"] > 0),
+                "_ConversionDaysNum"
+            ].mean()
+        )
+        avg_conversion_2bhk = float(
+            bookings_work.loc[
+                bookings_work["_TypeNorm"].str.contains("2", na=False) &
+                (bookings_work["_ConversionDaysNum"] > 0),
+                "_ConversionDaysNum"
+            ].mean()
+        )
+    else:
+        avg_conversion_1bhk = 0.0
+        avg_conversion_2bhk = 0.0
+
+    if math.isnan(avg_conversion_1bhk):
+        avg_conversion_1bhk = 0.0
+    if math.isnan(avg_conversion_2bhk):
+        avg_conversion_2bhk = 0.0
 
     # ============================================================
-    # APPRECIATION LOGIC
+    # MONTHLY BOOKING + APPRECIATION
     # ============================================================
-    def _appreciation_summary(df: pd.DataFrame, unit_type: str | None = None) -> dict:
-        if df is None or df.empty:
-            return {
-                "pct": 0.0,
-                "lowest_month": "—",
-                "highest_month": "—",
-                "lowest_psf": 0.0,
-                "highest_psf": 0.0,
-            }
+    if not bookings_work.empty:
+        monthly_bookings_df = (
+            bookings_work
+            .groupby(["_MonthSort", "_MonthLabel"], as_index=False)
+            .size()
+            .rename(columns={"_MonthLabel": "Month", "size": "Bookings"})
+            .sort_values("_MonthSort")
+        )
+        month_sort_order = monthly_bookings_df["Month"].tolist()
+        avg_booking_per_month = float(monthly_bookings_df["Bookings"].mean()) if not monthly_bookings_df.empty else 0.0
+    else:
+        monthly_bookings_df = pd.DataFrame(columns=["_MonthSort", "Month", "Bookings"])
+        month_sort_order = []
+        avg_booking_per_month = 0.0
 
-        d = df.copy()
-        d = d[
-            d["_PSF"].notna()
-            & (d["_PSF"] > 0)
-            & d["_MonthSort"].ne("9999-99")
-        ].copy()
+    def _appreciation_from_first_to_latest(df_in: pd.DataFrame, type_filter=None):
+        if df_in is None or df_in.empty:
+            return 0.0, "—", 0.0, "—", 0.0
 
-        if unit_type:
-            d = d[d["_TypeForAppreciation"].eq(unit_type)].copy()
+        d = df_in.copy()
+        if type_filter:
+            d = d[d["_TypeNorm"].astype(str).str.contains(type_filter, na=False)].copy()
 
+        d = d[(d["_PSF"] > 0) & (d["_MonthSort"] != "9999-99")].copy()
         if d.empty:
-            return {
-                "pct": 0.0,
-                "lowest_month": "—",
-                "highest_month": "—",
-                "lowest_psf": 0.0,
-                "highest_psf": 0.0,
-            }
+            return 0.0, "—", 0.0, "—", 0.0
 
-        monthly_avg = (
+        g = (
             d.groupby(["_MonthSort", "_MonthLabel"], as_index=False)["_PSF"]
             .mean()
             .sort_values("_MonthSort")
+            .reset_index(drop=True)
         )
 
-        if monthly_avg.empty:
-            return {
-                "pct": 0.0,
-                "lowest_month": "—",
-                "highest_month": "—",
-                "lowest_psf": 0.0,
-                "highest_psf": 0.0,
-            }
+        first = g.iloc[0]
+        latest = g.iloc[-1]
 
-        lowest_row = monthly_avg.loc[monthly_avg["_PSF"].idxmin()]
-        highest_row = monthly_avg.loc[monthly_avg["_PSF"].idxmax()]
+        first_psf = float(first["_PSF"])
+        latest_psf = float(latest["_PSF"])
 
-        lowest_psf = float(lowest_row["_PSF"])
-        highest_psf = float(highest_row["_PSF"])
+        app = ((latest_psf - first_psf) / first_psf * 100.0) if first_psf > 0 else 0.0
 
-        appreciation_pct = ((highest_psf - lowest_psf) / lowest_psf * 100.0) if lowest_psf > 0 else 0.0
+        return (
+            app,
+            str(first["_MonthLabel"]),
+            first_psf,
+            str(latest["_MonthLabel"]),
+            latest_psf,
+        )
 
-        return {
-            "pct": appreciation_pct,
-            "lowest_month": lowest_row["_MonthLabel"].title(),
-            "highest_month": highest_row["_MonthLabel"].title(),
-            "lowest_psf": lowest_psf,
-            "highest_psf": highest_psf,
-        }
-
-    app_1bhk = _appreciation_summary(bookings_work, "1 BHK")
-    app_2bhk = _appreciation_summary(bookings_work, "2 BHK")
-    app_overall = _appreciation_summary(bookings_work, None)
+    app_1bhk, app_1_start_m, app_1_start, app_1_end_m, app_1_end = _appreciation_from_first_to_latest(bookings_work, "1")
+    app_2bhk, app_2_start_m, app_2_start, app_2_end_m, app_2_end = _appreciation_from_first_to_latest(bookings_work, "2")
+    app_all, app_all_start_m, app_all_start, app_all_end_m, app_all_end = _appreciation_from_first_to_latest(bookings_work, None)
 
     # ============================================================
     # HOLDS / AGREEMENT LINEUP
@@ -26053,6 +26032,7 @@ with tab15:
                 blank_type & holds_work[h_hold_by_col].fillna("").astype(str).str.strip().ne(""),
                 "_EntryType"
             ] = "HOLD"
+
         if h_lineup_by_col:
             holds_work.loc[
                 blank_type & holds_work[h_lineup_by_col].fillna("").astype(str).str.strip().ne(""),
@@ -26148,21 +26128,19 @@ with tab15:
 
         type_psf_df = (
             bookings_work[bookings_work["_PSF"] > 0]
-            .groupby("_TypeForAppreciation", as_index=False)["_PSF"]
+            .groupby("_TypeNorm", as_index=False)["_PSF"]
             .mean()
-            .rename(columns={"_TypeForAppreciation": "Type", "_PSF": "Avg PSF"})
+            .rename(columns={"_TypeNorm": "Type", "_PSF": "Avg PSF"})
             .sort_values("Type")
         )
-        type_psf_df = type_psf_df[type_psf_df["Type"].ne("")].copy()
 
         wing_type_psf_df = (
             bookings_work[bookings_work["_PSF"] > 0]
-            .groupby(["_WingNorm", "_TypeForAppreciation"], as_index=False)["_PSF"]
+            .groupby(["_WingNorm", "_TypeNorm"], as_index=False)["_PSF"]
             .mean()
-            .rename(columns={"_WingNorm": "Wing", "_TypeForAppreciation": "Type", "_PSF": "Avg PSF"})
+            .rename(columns={"_WingNorm": "Wing", "_TypeNorm": "Type", "_PSF": "Avg PSF"})
             .sort_values(["Wing", "Type"])
         )
-        wing_type_psf_df = wing_type_psf_df[wing_type_psf_df["Type"].ne("")].copy()
     else:
         wing_psf_df = pd.DataFrame(columns=["Wing", "Avg PSF"])
         type_psf_df = pd.DataFrame(columns=["Type", "Avg PSF"])
@@ -26195,6 +26173,58 @@ with tab15:
         })
 
     wing_inventory_df = pd.DataFrame(wing_inventory_rows)
+
+    # ============================================================
+    # AGREEMENT / STAMP DUTY PENDING TABLES
+    # ============================================================
+    if not bookings_work.empty:
+        stamp_pending_rows = bookings_work[~bookings_work["_StampReceived"]].copy()
+        agreement_pending_rows = bookings_work[~bookings_work["_AgreementDone"]].copy()
+
+        if not stamp_pending_rows.empty:
+            stamp_pending_month_exec_df = (
+                stamp_pending_rows
+                .groupby(["_MonthSort", "_MonthLabel", "_SalesExecutive"], as_index=False)
+                .size()
+                .rename(columns={
+                    "_MonthLabel": "Month",
+                    "_SalesExecutive": "Sales Executive",
+                    "size": "Stamp Duty Pending Count",
+                })
+                .sort_values(["_MonthSort", "Sales Executive"])
+                .drop(columns=["_MonthSort"])
+                .reset_index(drop=True)
+            )
+        else:
+            stamp_pending_month_exec_df = pd.DataFrame(columns=[
+                "Month", "Sales Executive", "Stamp Duty Pending Count"
+            ])
+
+        if not agreement_pending_rows.empty:
+            agreement_pending_month_exec_df = (
+                agreement_pending_rows
+                .groupby(["_MonthSort", "_MonthLabel", "_SalesExecutive"], as_index=False)
+                .size()
+                .rename(columns={
+                    "_MonthLabel": "Month",
+                    "_SalesExecutive": "Sales Executive",
+                    "size": "Agreement Not Done Pending Count",
+                })
+                .sort_values(["_MonthSort", "Sales Executive"])
+                .drop(columns=["_MonthSort"])
+                .reset_index(drop=True)
+            )
+        else:
+            agreement_pending_month_exec_df = pd.DataFrame(columns=[
+                "Month", "Sales Executive", "Agreement Not Done Pending Count"
+            ])
+    else:
+        stamp_pending_month_exec_df = pd.DataFrame(columns=[
+            "Month", "Sales Executive", "Stamp Duty Pending Count"
+        ])
+        agreement_pending_month_exec_df = pd.DataFrame(columns=[
+            "Month", "Sales Executive", "Agreement Not Done Pending Count"
+        ])
 
     # ============================================================
     # MARKETING SUMMARY
@@ -26256,8 +26286,6 @@ with tab15:
             .rename(columns={"_MonthLabel": "Month", "_AmountNum": "Marketing Spend"})
             .sort_values("_MonthSort")
         )
-        monthly_marketing_df = monthly_marketing_df[monthly_marketing_df["_MonthSort"].ne("9999-99")].copy()
-
         purpose_marketing_df = (
             marketing_work
             .assign(Purpose=marketing_work[m_purpose_col] if m_purpose_col else "")
@@ -26333,9 +26361,6 @@ with tab15:
         booking_exec_names = []
 
     all_execs = sorted(set(KNOWN_EXECUTIVES + booking_exec_names))
-
-    def _exec_key(name):
-        return re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
 
     def _sum_exec_metric(df, exec_name, metric_names):
         if df is None or df.empty:
@@ -26442,7 +26467,6 @@ with tab15:
             })
             .sort_values("_MonthSort")
         )
-        monthly_visit_call_df = monthly_visit_call_df[monthly_visit_call_df["_MonthSort"].ne("9999-99")].copy()
     else:
         monthly_visit_call_df = pd.DataFrame(columns=["_MonthSort", "Month", "Total Visits", "Total Revisits", "Total Calls"])
 
@@ -26613,219 +26637,118 @@ with tab15:
     total_cashflow_received_pct = _pct(total_cashflow_received, total_collection)
 
     # ============================================================
-    # MONTHLY BOOKING + SEPARATE PENDING TABLES
-    # ============================================================
-    if not bookings_work.empty:
-        monthly_bookings_df = (
-            bookings_work
-            .groupby(["_MonthSort", "_MonthLabel"], as_index=False)
-            .size()
-            .rename(columns={"_MonthLabel": "Month", "size": "Bookings"})
-            .sort_values("_MonthSort")
-        )
-        monthly_bookings_df = monthly_bookings_df[monthly_bookings_df["_MonthSort"].ne("9999-99")].copy()
-        month_sort_order = monthly_bookings_df["Month"].tolist()
-
-        stamp_pending_rows = bookings_work[~bookings_work["_StampReceived"]].copy()
-        agreement_pending_rows = bookings_work[~bookings_work["_AgreementDone"]].copy()
-
-        if not stamp_pending_rows.empty:
-            stamp_pending_month_exec_df = (
-                stamp_pending_rows
-                .groupby(["_MonthSort", "_MonthLabel", "_SalesExecutive"], as_index=False)
-                .size()
-                .rename(columns={
-                    "_MonthLabel": "Month",
-                    "_SalesExecutive": "Sales Executive",
-                    "size": "Stamp Duty Pending Count",
-                })
-                .sort_values(["_MonthSort", "Sales Executive"])
-                .drop(columns=["_MonthSort"])
-                .reset_index(drop=True)
-            )
-        else:
-            stamp_pending_month_exec_df = pd.DataFrame(columns=[
-                "Month", "Sales Executive", "Stamp Duty Pending Count"
-            ])
-
-        if not agreement_pending_rows.empty:
-            agreement_pending_month_exec_df = (
-                agreement_pending_rows
-                .groupby(["_MonthSort", "_MonthLabel", "_SalesExecutive"], as_index=False)
-                .size()
-                .rename(columns={
-                    "_MonthLabel": "Month",
-                    "_SalesExecutive": "Sales Executive",
-                    "size": "Agreement Not Done Pending Count",
-                })
-                .sort_values(["_MonthSort", "Sales Executive"])
-                .drop(columns=["_MonthSort"])
-                .reset_index(drop=True)
-            )
-        else:
-            agreement_pending_month_exec_df = pd.DataFrame(columns=[
-                "Month", "Sales Executive", "Agreement Not Done Pending Count"
-            ])
-    else:
-        monthly_bookings_df = pd.DataFrame(columns=["_MonthSort", "Month", "Bookings"])
-        month_sort_order = []
-        stamp_pending_month_exec_df = pd.DataFrame(columns=[
-            "Month", "Sales Executive", "Stamp Duty Pending Count"
-        ])
-        agreement_pending_month_exec_df = pd.DataFrame(columns=[
-            "Month", "Sales Executive", "Agreement Not Done Pending Count"
-        ])
-
-    # ============================================================
     # SALES TARGETS
+    # Supports WIDE table:
+    #   month | Tejas P | Komal K | Ashutosh S ...
+    # Also supports LONG table:
+    #   month | sales_executive | target
     # ============================================================
-    def _target_exec_label(col_name: str) -> str:
-        raw = _safe_str(col_name)
+    def _target_month_matches(value, wanted_key, wanted_label):
+        k, lbl = _month_key_label_from_any(value, value)
+        return k == wanted_key or lbl == wanted_label
 
-        known_map = {
-            "alokr": "Alok R",
-            "tejasp": "Tejas P",
-            "ashutoshs": "Ashutosh S",
-            "sagarb": "Sagar B",
-            "harshals": "Harshal S",
-            "komalk": "Komal K",
-            "saileed": "Sailee D",
-            "advaitm": "Advait M",
-        }
+    def _find_exec_target_col(df, exec_name):
+        variants = [
+            exec_name,
+            exec_name.lower(),
+            exec_name.upper(),
+            exec_name.title(),
+            _exec_key(exec_name),
+            _exec_key(exec_name).replace("_", ""),
+        ]
+        cmap = {_norm_col(c): c for c in df.columns}
+        for v in variants:
+            key = _norm_col(v)
+            if key in cmap:
+                return cmap[key]
+        return None
 
-        n = _norm_col(raw)
-        if n in known_map:
-            return known_map[n]
+    def _target_map_for_month(target_df, month_key, month_label):
+        out = {}
+        if target_df is None or target_df.empty:
+            return out
 
-        for known in KNOWN_EXECUTIVES:
-            if _norm_col(known) == n:
-                return known
+        df = target_df.copy()
+        df.columns = [str(c).strip() for c in df.columns]
 
-        return raw.replace("_", " ").title()
+        month_col = _col(df, "month", "Month")
+        se_col = _col(df, "sales_executive", "Sales Executive")
+        target_col = _col(df, "target", "booking_target", "target_bookings", "Target")
 
-    def _prepare_sales_targets(df: pd.DataFrame) -> pd.DataFrame:
-        if df is None or df.empty:
-            return pd.DataFrame()
-
-        out = df.copy()
-        out.columns = [str(c).strip() for c in out.columns]
-
-        month_col = _col(out, "month", "Month")
         if not month_col:
-            return pd.DataFrame()
+            return out
 
-        month_pairs = out[month_col].apply(lambda x: _month_key_label_from_any("", x))
-        out["_TargetMonthSort"] = [x[0] for x in month_pairs]
-        out["_TargetMonthLabel"] = [x[1] for x in month_pairs]
+        df["_month_match"] = df[month_col].apply(lambda x: _target_month_matches(x, month_key, month_label))
+        df = df[df["_month_match"]].copy()
+
+        if df.empty:
+            return out
+
+        # Long format
+        if se_col and target_col:
+            for _, r in df.iterrows():
+                ex = _safe_str(r.get(se_col, ""))
+                val = _to_num(r.get(target_col, 0))
+                if ex:
+                    out[ex] = out.get(ex, 0.0) + val
+            return out
+
+        # Wide format: month + executive columns
+        row = df.iloc[-1]
+        for exec_name in all_execs:
+            c = _find_exec_target_col(df, exec_name)
+            if c:
+                val = _to_num(row.get(c, 0))
+                out[exec_name] = val
 
         return out
 
-    targets_work = _prepare_sales_targets(sales_targets_df)
+    current_target_map = _target_map_for_month(sales_targets_df, THIS_MONTH_KEY, THIS_MONTH_LABEL)
+    next_target_map = _target_map_for_month(sales_targets_df, NEXT_MONTH_KEY, NEXT_MONTH_LABEL)
 
-    def _get_target_row(targets_df: pd.DataFrame, month_key: str):
-        if targets_df is None or targets_df.empty:
-            return None
+    achieved_map = {}
+    if not bookings_work.empty:
+        curr_month_bookings = bookings_work[bookings_work["_MonthSort"].eq(THIS_MONTH_KEY)].copy()
+        achieved_map = curr_month_bookings["_SalesExecutive"].value_counts().to_dict()
 
-        hit = targets_df[targets_df["_TargetMonthSort"].eq(month_key)].copy()
-        if hit.empty:
-            return None
+    target_execs = sorted(set(list(current_target_map.keys()) + list(next_target_map.keys()) + list(achieved_map.keys())))
 
-        return hit.iloc[-1]
+    sales_target_rows = []
+    for exec_name in target_execs:
+        target_this = int(round(_to_num(current_target_map.get(exec_name, 0))))
+        achieved_this = int(round(_to_num(achieved_map.get(exec_name, 0))))
+        target_next = int(round(_to_num(next_target_map.get(exec_name, 0))))
 
-    def _sales_target_columns(targets_df: pd.DataFrame) -> list[str]:
-        if targets_df is None or targets_df.empty:
-            return []
+        # Only show people where target OR achieved is present.
+        if target_this <= 0 and achieved_this <= 0 and target_next <= 0:
+            continue
 
-        ignore_norms = {
-            _norm_col("id"),
-            _norm_col("created_at"),
-            _norm_col("month"),
-            _norm_col("_TargetMonthSort"),
-            _norm_col("_TargetMonthLabel"),
-        }
+        sales_target_rows.append({
+            "Sales Executive": exec_name,
+            f"{THIS_MONTH_LABEL} Target": target_this,
+            f"{THIS_MONTH_LABEL} Achieved": achieved_this,
+            "Achievement %": _pct(achieved_this, target_this),
+            f"{NEXT_MONTH_LABEL} Target": target_next,
+        })
 
-        cols = []
-        for c in targets_df.columns:
-            if _norm_col(c) not in ignore_norms:
-                cols.append(c)
+    sales_target_summary_df = (
+        pd.DataFrame(sales_target_rows)
+        .sort_values([f"{THIS_MONTH_LABEL} Achieved", f"{THIS_MONTH_LABEL} Target"], ascending=False)
+        .reset_index(drop=True)
+        if sales_target_rows else
+        pd.DataFrame(columns=[
+            "Sales Executive",
+            f"{THIS_MONTH_LABEL} Target",
+            f"{THIS_MONTH_LABEL} Achieved",
+            "Achievement %",
+            f"{NEXT_MONTH_LABEL} Target",
+        ])
+    )
 
-        return cols
-
-    def _target_achievement_table(month_key: str, next_key: str) -> pd.DataFrame:
-        target_cols = _sales_target_columns(targets_work)
-
-        if not target_cols:
-            return pd.DataFrame(columns=[
-                "Sales Executive",
-                "This Month Target",
-                "Achieved",
-                "Pending",
-                "Achievement %",
-                "Next Month Target",
-                "Status",
-            ])
-
-        current_row = _get_target_row(targets_work, month_key)
-        next_row = _get_target_row(targets_work, next_key)
-
-        if not bookings_work.empty:
-            achieved_df = bookings_work[bookings_work["_MonthSort"].eq(month_key)].copy()
-            achieved_map = (
-                achieved_df["_SalesExecutive"]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-                .map(_norm_col)
-                .value_counts()
-                .to_dict()
-            )
-        else:
-            achieved_map = {}
-
-        rows = []
-
-        for col_name in target_cols:
-            exec_name = _target_exec_label(col_name)
-            exec_key = _norm_col(exec_name)
-
-            this_target = _to_num(current_row.get(col_name, 0)) if current_row is not None else 0.0
-            next_target = _to_num(next_row.get(col_name, 0)) if next_row is not None else 0.0
-
-            achieved = float(achieved_map.get(exec_key, 0))
-            pending = max(this_target - achieved, 0.0)
-            achievement_pct = _pct(achieved, this_target)
-
-            if this_target <= 0:
-                status = "No Target"
-            elif achieved >= this_target:
-                status = "Achieved"
-            elif achievement_pct >= 75:
-                status = "On Track"
-            else:
-                status = "Pending"
-
-            rows.append({
-                "Sales Executive": exec_name,
-                "This Month Target": int(this_target),
-                "Achieved": int(achieved),
-                "Pending": int(pending),
-                "Achievement %": round(achievement_pct, 1),
-                "Next Month Target": int(next_target),
-                "Status": status,
-            })
-
-        return pd.DataFrame(rows).sort_values(
-            ["Achievement %", "Achieved"],
-            ascending=False
-        ).reset_index(drop=True)
-
-    target_achievement_df = _target_achievement_table(THIS_MONTH_KEY, NEXT_MONTH_KEY)
-
-    total_this_month_target = int(target_achievement_df["This Month Target"].sum()) if not target_achievement_df.empty else 0
-    total_this_month_achieved = int(target_achievement_df["Achieved"].sum()) if not target_achievement_df.empty else 0
-    total_this_month_pending = max(total_this_month_target - total_this_month_achieved, 0)
-    total_next_month_target = int(target_achievement_df["Next Month Target"].sum()) if not target_achievement_df.empty else 0
-    total_target_achievement_pct = _pct(total_this_month_achieved, total_this_month_target)
+    current_month_total_target = int(sales_target_summary_df[f"{THIS_MONTH_LABEL} Target"].sum()) if not sales_target_summary_df.empty else 0
+    current_month_total_achieved = int(sales_target_summary_df[f"{THIS_MONTH_LABEL} Achieved"].sum()) if not sales_target_summary_df.empty else 0
+    next_month_total_target = int(sales_target_summary_df[f"{NEXT_MONTH_LABEL} Target"].sum()) if not sales_target_summary_df.empty else 0
+    current_month_achievement_pct = _pct(current_month_total_achieved, current_month_total_target)
 
     # ============================================================
     # CHART HELPERS WITH LABELS
@@ -26912,59 +26835,28 @@ with tab15:
 
     b5, b6, b7, b8 = st.columns(4)
     with b5:
-        kpi_card("Overall Avg Conversion Period", f"{avg_conversion_days:.1f} days", "First visit to booking", "ss-purple")
+        kpi_card("Avg Conversion — 1 BHK", f"{avg_conversion_1bhk:.1f} days" if avg_conversion_1bhk > 0 else "—", "First visit to booking", "ss-purple")
     with b6:
-        kpi_card("Average Visits for Booking", f"{avg_visits_for_booking:.1f}", "From Visit Count", "ss-purple")
+        kpi_card("Avg Conversion — 2 BHK", f"{avg_conversion_2bhk:.1f} days" if avg_conversion_2bhk > 0 else "—", "First visit to booking", "ss-purple")
     with b7:
-        kpi_card("Average Booking / Month", f"{avg_booking_per_month:.2f}", "Based on booking date months", "ss-green")
+        kpi_card("Overall Avg Conversion", f"{avg_conversion_days:.1f} days" if avg_conversion_days > 0 else "—", "First visit to booking", "ss-purple")
     with b8:
-        kpi_card("Total Units Sold", f"{sold_units_distinct:,}", "Distinct Wing + Flat", "ss-green")
+        kpi_card("Avg Visits / Booking", f"{avg_visits_for_booking:.1f}" if avg_visits_for_booking > 0 else "—", "From Visit Count", "ss-gray")
 
-    appc1, appc2, appc3 = st.columns(3)
-
-    with appc1:
-        kpi_card(
-            "1 BHK Appreciation %",
-            _fmt_pct(app_1bhk["pct"]),
-            f"Lowest Avg Month ({app_1bhk['lowest_month']}): {_fmt_psf(app_1bhk['lowest_psf'])}  |  "
-            f"Highest Avg Month ({app_1bhk['highest_month']}): {_fmt_psf(app_1bhk['highest_psf'])}",
-            "ss-green",
-        )
-
-    with appc2:
-        kpi_card(
-            "2 BHK Appreciation %",
-            _fmt_pct(app_2bhk["pct"]),
-            f"Lowest Avg Month ({app_2bhk['lowest_month']}): {_fmt_psf(app_2bhk['lowest_psf'])}  |  "
-            f"Highest Avg Month ({app_2bhk['highest_month']}): {_fmt_psf(app_2bhk['highest_psf'])}",
-            "ss-green",
-        )
-
-    with appc3:
-        kpi_card(
-            "Overall Appreciation %",
-            _fmt_pct(app_overall["pct"]),
-            f"Lowest Avg Month ({app_overall['lowest_month']}): {_fmt_psf(app_overall['lowest_psf'])}  |  "
-            f"Highest Avg Month ({app_overall['highest_month']}): {_fmt_psf(app_overall['highest_psf'])}",
-            "ss-green",
-        )
-
-    if not monthly_bookings_df.empty:
-        st.altair_chart(
-            line_chart_with_labels(
-                monthly_bookings_df,
-                x="Month",
-                y="Bookings",
-                title="Month-wise Bookings",
-                x_sort=month_sort_order
-            ),
-            use_container_width=True
-        )
+    b9, b10, b11, b12 = st.columns(4)
+    with b9:
+        kpi_card("Avg Booking / Month", f"{avg_booking_per_month:.1f}", "Active booking months", "ss-blue")
+    with b10:
+        kpi_card("1 BHK Appreciation", _fmt_pct(app_1bhk), f"{app_1_start_m}: {_fmt_psf(app_1_start)} → {app_1_end_m}: {_fmt_psf(app_1_end)}", "ss-green")
+    with b11:
+        kpi_card("2 BHK Appreciation", _fmt_pct(app_2bhk), f"{app_2_start_m}: {_fmt_psf(app_2_start)} → {app_2_end_m}: {_fmt_psf(app_2_end)}", "ss-green")
+    with b12:
+        kpi_card("Overall Appreciation", _fmt_pct(app_all), f"{app_all_start_m}: {_fmt_psf(app_all_start)} → {app_all_end_m}: {_fmt_psf(app_all_end)}", "ss-green")
 
     # ============================================================
     # SECTION 2 — AGREEMENT & STAMP DUTY
     # ============================================================
-    section_card("✅ Agreement & Stamp Duty Status", "Separate status totals and pending tables by month and sales executive.")
+    section_card("✅ Agreement & Stamp Duty Status", "Separate status totals and pending counts.")
 
     a1, a2, a3, a4 = st.columns(4)
     with a1:
@@ -26991,7 +26883,7 @@ with tab15:
     # ============================================================
     # SECTION 3 — INVENTORY, PSF, HOLD, LINEUP
     # ============================================================
-    section_card("🏗️ Inventory, Wing-wise & Type-wise Sales", "Units sold, units left to sell, active holds, agreement lineup, and PSF.")
+    section_card("🏗️ Inventory, Wing-wise & Type-wise Sales", "Units sold, units left to sell, holds, agreement lineup, and PSF.")
 
     inventory_display = wing_inventory_df.copy()
     inventory_display["Sold %"] = inventory_display["Sold %"].apply(_fmt_pct)
@@ -27155,7 +27047,11 @@ with tab15:
             use_container_width=True
         )
 
-    st.markdown("### 👥 Sales Executive Call → Visit → Revisit → Booking Table")
+    # ============================================================
+    # SECTION 6 — SALES EXECUTIVE PERFORMANCE
+    # ============================================================
+    section_card("👥 Sales Executive Performance", "Call → visit → revisit → booking performance by executive.")
+
     if exec_summary_df.empty:
         st.info("No sales executive summary available.")
     else:
@@ -27183,7 +27079,7 @@ with tab15:
         )
 
     # ============================================================
-    # SECTION 6 — COLLECTION / CASHFLOW
+    # SECTION 7 — COLLECTION / CASHFLOW
     # ============================================================
     section_card("💰 Collection, Received, Due & Current Construction Stage", "Current stage is read directly from the cashflow_slab_master table.")
 
@@ -27219,127 +27115,45 @@ with tab15:
         st.info("No wing-wise cashflow data available.")
 
     # ============================================================
-    # SECTION 7 — SALES TARGETS
+    # SECTION 8 — SALES TARGET & ACHIEVEMENT
     # ============================================================
-    section_card(
-        "🎯 Sales Target & Achievement",
-        "This month target, achieved bookings, pending target, achievement percentage, and next month target."
-    )
+    section_card("🎯 Sales Target & Achievement", "This month target, achieved bookings, and next month target from sales_targets.")
 
-    tc1, tc2, tc3, tc4 = st.columns(4)
+    t1, t2, t3, t4 = st.columns(4)
+    with t1:
+        kpi_card("Current Month", THIS_MONTH_LABEL, "Target month", "ss-blue")
+    with t2:
+        kpi_card("This Month Target", f"{current_month_total_target:,}", "Team total", "ss-amber")
+    with t3:
+        kpi_card("This Month Achieved", f"{current_month_total_achieved:,}", f"{_fmt_pct(current_month_achievement_pct)} achieved", "ss-green")
+    with t4:
+        kpi_card("Next Month Target", f"{next_month_total_target:,}", NEXT_MONTH_LABEL, "ss-purple")
 
-    with tc1:
-        kpi_card("Current Month", _month_label_from_key(THIS_MONTH_KEY), "Target month", "ss-blue")
-
-    with tc2:
-        kpi_card(
-            "This Month Target",
-            f"{total_this_month_target:,}",
-            f"Next month: {total_next_month_target:,}",
-            "ss-purple",
-        )
-
-    with tc3:
-        kpi_card(
-            "Achieved",
-            f"{total_this_month_achieved:,}",
-            f"Pending: {total_this_month_pending:,}",
-            "ss-green",
-        )
-
-    with tc4:
-        kpi_card(
-            "Achievement %",
-            _fmt_pct(total_target_achievement_pct),
-            "Achieved / target",
-            "ss-amber",
-        )
-
-    if target_achievement_df.empty:
-        st.info("No sales target data found. Please add targets in the sales_targets table.")
+    if sales_target_summary_df.empty:
+        st.info("No sales target or achieved bookings found for this month / next month.")
     else:
-        st.markdown("### 🎯 Executive-wise Target Progress")
+        target_display = sales_target_summary_df.copy()
+        target_display["Achievement %"] = target_display["Achievement %"].apply(_fmt_pct)
+        render_table(target_display)
 
-        st.dataframe(
-            target_achievement_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "This Month Target": st.column_config.NumberColumn("This Month Target", format="%d"),
-                "Achieved": st.column_config.NumberColumn("Achieved", format="%d"),
-                "Pending": st.column_config.NumberColumn("Pending", format="%d"),
-                "Achievement %": st.column_config.ProgressColumn(
-                    "Achievement %",
-                    min_value=0,
-                    max_value=100,
-                    format="%.1f%%",
-                ),
-                "Next Month Target": st.column_config.NumberColumn(
-                    f"Next Month Target ({_month_label_from_key(NEXT_MONTH_KEY)})",
-                    format="%d",
-                ),
-            },
+    # ============================================================
+    # SECTION 9 — MONTH-WISE BOOKING TREND
+    # ============================================================
+    section_card("📈 Month-wise Booking Trend", "Booking trend based on booking date only.")
+
+    if monthly_bookings_df.empty:
+        st.info("No monthly booking data available.")
+    else:
+        st.altair_chart(
+            line_chart_with_labels(
+                monthly_bookings_df,
+                x="Month",
+                y="Bookings",
+                title="Month-wise Bookings",
+                x_sort=month_sort_order
+            ),
+            use_container_width=True
         )
-
-        with st.expander("Detailed target progress cards", expanded=True):
-            for _, row in target_achievement_df.iterrows():
-                exec_name = row["Sales Executive"]
-                target = int(row["This Month Target"])
-                achieved = int(row["Achieved"])
-                pending = int(row["Pending"])
-                pct = float(row["Achievement %"])
-                next_target = int(row["Next Month Target"])
-                status = row["Status"]
-
-                if status == "Achieved":
-                    tone = "#ecfdf5"
-                    badge_bg = "#16a34a"
-                elif status == "On Track":
-                    tone = "#eff6ff"
-                    badge_bg = "#2563eb"
-                elif status == "Pending":
-                    tone = "#fff7ed"
-                    badge_bg = "#f97316"
-                else:
-                    tone = "#f8fafc"
-                    badge_bg = "#64748b"
-
-                st.markdown(
-                    f"""
-                    <div class="target-card" style="background:{tone};">
-                        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-                            <div>
-                                <div style="font-weight:900; font-size:18px; color:#0f172a;">{escape(exec_name)}</div>
-                                <div style="font-size:12px; color:#64748b; font-weight:700;">
-                                    Target: {target:,} | Achieved: {achieved:,} | Pending: {pending:,} | Next Month: {next_target:,}
-                                </div>
-                            </div>
-                            <div style="
-                                background:{badge_bg};
-                                color:white;
-                                padding:6px 12px;
-                                border-radius:999px;
-                                font-size:12px;
-                                font-weight:900;
-                            ">
-                                {escape(status)}
-                            </div>
-                        </div>
-                        <div style="margin-top:12px; background:#e5e7eb; height:12px; border-radius:999px; overflow:hidden;">
-                            <div style="
-                                width:{min(max(pct, 0), 100)}%;
-                                background:linear-gradient(135deg,#2563eb,#7c3aed);
-                                height:12px;
-                                border-radius:999px;
-                            "></div>
-                        </div>
-                        <div style="margin-top:6px; font-size:12px; font-weight:800; color:#334155;">
-                            {pct:.1f}% achieved
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
 
     # ============================================================
     # EMAIL REPORT HELPERS
@@ -27352,8 +27166,11 @@ with tab15:
         return show_df.to_html(index=False, border=0, classes="email-table")
 
     def _make_matplotlib_chart(chart_type: str, df: pd.DataFrame, title: str):
-        import matplotlib.pyplot as plt
-        import numpy as np
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+        except Exception:
+            return None
 
         buf = io.BytesIO()
         fig, ax = plt.subplots(figsize=(11, 5.2))
@@ -27387,6 +27204,18 @@ with tab15:
             ax.set_xticklabels(plot_df["Wing"])
             ax.set_ylabel("Units")
             ax.legend()
+
+        elif chart_type == "wing_type_psf":
+            if df.empty:
+                ax.text(0.5, 0.5, "No data available", ha="center", va="center")
+            else:
+                piv = df.pivot_table(index="Wing", columns="Type", values="Avg PSF", aggfunc="mean", fill_value=0)
+                piv.plot(kind="bar", ax=ax)
+                ax.set_ylabel("Avg PSF")
+                ax.tick_params(axis="x", rotation=0)
+                for container in ax.containers:
+                    ax.bar_label(container, padding=3, fontsize=8, fmt="%.0f")
+                ax.legend(title="Type")
 
         elif chart_type == "monthly_marketing":
             bars = ax.bar(df["Month"], df["Marketing Spend"])
@@ -27425,23 +27254,6 @@ with tab15:
             ax.tick_params(axis="x", rotation=35)
             ax.legend()
 
-        elif chart_type == "target":
-            plot_df = df[["Sales Executive", "This Month Target", "Achieved", "Pending"]].copy()
-            x = np.arange(len(plot_df))
-            width = 0.25
-            series = [
-                ("Target", plot_df["This Month Target"], -width),
-                ("Achieved", plot_df["Achieved"], 0),
-                ("Pending", plot_df["Pending"], width),
-            ]
-            for label, values, offset in series:
-                bars = ax.bar(x + offset, values, width=width, label=label)
-                ax.bar_label(bars, padding=3, fontsize=7)
-            ax.set_xticks(x)
-            ax.set_xticklabels(plot_df["Sales Executive"], rotation=20, ha="right")
-            ax.set_ylabel("Bookings")
-            ax.legend()
-
         ax.set_title(title)
         fig.tight_layout()
         fig.savefig(buf, format="png", dpi=160, bbox_inches="tight")
@@ -27449,35 +27261,42 @@ with tab15:
         buf.seek(0)
         return buf.getvalue()
 
-    def _build_email_html(image_cids: dict):
-        booking_cards = [
-            ("Total Bookings", f"{total_bookings:,}", f"Distinct sold units: {sold_units_distinct:,}"),
-            ("Agreement Done", f"{total_agreement_done:,}", f"Pending: {total_agreement_pending:,}"),
-            ("Stamp Duty Received", f"{total_stamp_received:,}", f"Pending: {total_stamp_pending:,}"),
-            ("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Rate / saleable"),
-            ("Units Left to Sell", f"{our_available_units:,}", f"Hold: {active_hold_count:,} | Lineup: {agreement_lineup_count:,}"),
-            ("Marketing Spend", _fmt_money(total_marketing_spend), f"{_fmt_pct(marketing_spend_pct_agreement)} of agreement value"),
-            ("Total Visits", f"{int(total_visits):,}", f"Revisits: {int(total_revisits):,}"),
-            ("Total Due", _fmt_money(total_cashflow_due), f"Due %: {_fmt_pct(total_cashflow_due_pct)}"),
-            ("This Month Target", f"{total_this_month_target:,}", f"Achieved: {total_this_month_achieved:,}"),
-        ]
+    def _email_section(title, subtitle=""):
+        return f"""
+        <div class="section-card">
+            <h2>{escape(str(title))}</h2>
+            <p>{escape(str(subtitle))}</p>
+        </div>
+        """
 
-        cards_html = ""
-        for title, value, sub in booking_cards:
-            cards_html += f"""
-            <div class="card">
+    def _email_kpi_grid(cards):
+        html = '<div class="grid">'
+        for title, value, sub, tone in cards:
+            html += f"""
+            <div class="card {tone}">
                 <div class="card-title">{escape(str(title))}</div>
                 <div class="card-value">{escape(str(value))}</div>
                 <div class="card-sub">{escape(str(sub))}</div>
             </div>
             """
+        html += "</div>"
+        return html
 
-        chart_html = ""
-        for title, cid in image_cids.items():
-            chart_html += f"""
-            <h2>{escape(str(title))}</h2>
-            <img src="cid:{cid}" style="max-width:100%; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:18px;" />
-            """
+    def _email_chart(title, cid):
+        if not cid:
+            return ""
+        return f"""
+        <h3>{escape(str(title))}</h3>
+        <img src="cid:{cid}" style="max-width:100%; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:18px;" />
+        """
+
+    def _build_email_html(image_cids: dict):
+        generated_at = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
+
+        inv_email_df = wing_inventory_df.copy()
+        if not inv_email_df.empty:
+            inv_email_df["Sold %"] = inv_email_df["Sold %"].apply(_fmt_pct)
+            inv_email_df["Avg PSF"] = inv_email_df["Avg PSF"].apply(_fmt_psf)
 
         exec_email_df = exec_summary_df.copy()
         if not exec_email_df.empty:
@@ -27491,14 +27310,11 @@ with tab15:
             for c in ["Received %", "Due %"]:
                 wing_email_df[c] = wing_email_df[c].apply(_fmt_pct)
 
-        inv_email_df = wing_inventory_df.copy()
-        if not inv_email_df.empty:
-            inv_email_df["Sold %"] = inv_email_df["Sold %"].apply(_fmt_pct)
-            inv_email_df["Avg PSF"] = inv_email_df["Avg PSF"].apply(_fmt_psf)
+        target_email_df = sales_target_summary_df.copy()
+        if not target_email_df.empty:
+            target_email_df["Achievement %"] = target_email_df["Achievement %"].apply(_fmt_pct)
 
-        generated_at = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
-
-        return f"""
+        html = f"""
         <html>
         <head>
             <style>
@@ -27519,14 +27335,10 @@ with tab15:
                     font-size: 26px;
                     text-align: center;
                 }}
-                h2 {{
-                    background: linear-gradient(135deg,#2563eb 0%,#7c3aed 100%);
-                    color: white;
-                    border-radius: 14px;
-                    padding: 12px;
-                    text-align: center;
-                    margin-top: 28px;
-                    font-size: 18px;
+                h3 {{
+                    font-size: 17px;
+                    margin: 22px 0 10px;
+                    color: #0f172a;
                 }}
                 .muted {{
                     color: #64748b;
@@ -27534,18 +27346,43 @@ with tab15:
                     margin-bottom: 18px;
                     text-align: center;
                 }}
+                .section-card {{
+                    background: linear-gradient(135deg,#2563eb 0%,#7c3aed 100%);
+                    color: white;
+                    border-radius: 18px;
+                    padding: 18px 14px;
+                    text-align: center;
+                    margin: 26px 0 16px 0;
+                }}
+                .section-card h2 {{
+                    margin: 0;
+                    font-size: 22px;
+                    font-weight: 900;
+                }}
+                .section-card p {{
+                    margin: 7px 0 0 0;
+                    font-size: 13px;
+                    font-weight: 700;
+                    opacity: .92;
+                }}
                 .grid {{
                     display: grid;
-                    grid-template-columns: repeat(3, minmax(0, 1fr));
+                    grid-template-columns: repeat(4, minmax(0, 1fr));
                     gap: 12px;
+                    margin-bottom: 12px;
                 }}
                 .card {{
                     border: 1px solid #e5e7eb;
                     border-radius: 14px;
                     padding: 14px;
-                    background: #f8fafc;
                     text-align: center;
                 }}
+                .blue {{background:#eff6ff;}}
+                .green {{background:#ecfdf5;}}
+                .amber {{background:#fff7ed;}}
+                .rose {{background:#fff1f2;}}
+                .purple {{background:#f5f3ff;}}
+                .gray {{background:#f8fafc;}}
                 .card-title {{
                     font-size: 12px;
                     font-weight: 800;
@@ -27553,7 +27390,7 @@ with tab15:
                     text-transform: uppercase;
                 }}
                 .card-value {{
-                    font-size: 24px;
+                    font-size: 23px;
                     font-weight: 900;
                     margin-top: 8px;
                     color: #0f172a;
@@ -27569,6 +27406,7 @@ with tab15:
                     width: 100%;
                     font-size: 12px;
                     margin-top: 8px;
+                    border: 1px solid #dbe4f0;
                 }}
                 table.email-table th {{
                     background: #2563eb;
@@ -27589,34 +27427,96 @@ with tab15:
             <div class="shell">
                 <h1>Pratham Vihar — Complete Site Summary</h1>
                 <div class="muted">Generated on {generated_at}</div>
+        """
 
-                <div class="grid">
-                    {cards_html}
-                </div>
+        html += _email_section("📌 Booking Summary", "Bookings counted from booking date only, starting April 2025.")
+        html += _email_kpi_grid([
+            ("Total Bookings", f"{total_bookings:,}", f"Distinct sold units: {sold_units_distinct:,}", "blue"),
+            ("Total Carpet Area Sold", f"{total_carpet_area:,.0f} sqft", "Carpet area", "green"),
+            ("Total Agreement Cost Sold", _fmt_money(total_agreement_value), "Agreement cost sold", "blue"),
+            ("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Rate or Agreement / Saleable", "amber"),
+            ("Avg Conversion — 1 BHK", f"{avg_conversion_1bhk:.1f} days" if avg_conversion_1bhk > 0 else "—", "First visit to booking", "purple"),
+            ("Avg Conversion — 2 BHK", f"{avg_conversion_2bhk:.1f} days" if avg_conversion_2bhk > 0 else "—", "First visit to booking", "purple"),
+            ("Overall Avg Conversion", f"{avg_conversion_days:.1f} days" if avg_conversion_days > 0 else "—", "First visit to booking", "purple"),
+            ("Avg Visits / Booking", f"{avg_visits_for_booking:.1f}" if avg_visits_for_booking > 0 else "—", "From Visit Count", "gray"),
+            ("Avg Booking / Month", f"{avg_booking_per_month:.1f}", "Active booking months", "blue"),
+            ("1 BHK Appreciation", _fmt_pct(app_1bhk), f"{app_1_start_m}: {_fmt_psf(app_1_start)} → {app_1_end_m}: {_fmt_psf(app_1_end)}", "green"),
+            ("2 BHK Appreciation", _fmt_pct(app_2bhk), f"{app_2_start_m}: {_fmt_psf(app_2_start)} → {app_2_end_m}: {_fmt_psf(app_2_end)}", "green"),
+            ("Overall Appreciation", _fmt_pct(app_all), f"{app_all_start_m}: {_fmt_psf(app_all_start)} → {app_all_end_m}: {_fmt_psf(app_all_end)}", "green"),
+        ])
 
-                {chart_html}
+        html += _email_section("✅ Agreement & Stamp Duty Status", "Separate status totals and pending counts.")
+        html += _email_kpi_grid([
+            ("Total Agreements", f"{total_bookings:,}", "All booked units", "blue"),
+            ("Agreement Done", f"{total_agreement_done:,}", f"Pending: {total_agreement_pending:,}", "green"),
+            ("Stamp Duty Received", f"{total_stamp_received:,}", f"Pending: {total_stamp_pending:,}", "green"),
+            ("Estimated Stamp Duty Value", _fmt_money(total_stamp_duty_amount_est), "Agreement cost × stamp %", "amber"),
+        ])
+        html += "<h3>Stamp Duty Pending / Not Received</h3>"
+        html += _df_to_email_table(stamp_pending_month_exec_df, max_rows=80)
+        html += "<h3>Agreement Not Done Pending</h3>"
+        html += _df_to_email_table(agreement_pending_month_exec_df, max_rows=80)
 
-                <h2>Wing-wise Inventory Summary</h2>
-                {_df_to_email_table(inv_email_df, max_rows=20)}
+        html += _email_section("🏗️ Inventory, Wing-wise & Type-wise Sales", "Units sold, units left to sell, holds, agreement lineup, and PSF.")
+        html += _df_to_email_table(inv_email_df, max_rows=20)
+        html += _email_chart("Wing-wise Sold, Hold, Lineup & Left to Sell", image_cids.get("Wing-wise Inventory"))
+        html += _email_chart("Wing-wise × Type-wise Avg PSF", image_cids.get("Wing-wise Type PSF"))
 
-                <h2>Sales Executive-wise Calls, Visits, Revisits & Conversion</h2>
-                {_df_to_email_table(exec_email_df, max_rows=30)}
+        html += _email_section("📣 Marketing Expenditure Summary", "Total spend, this month spend, recurring spend, agreement percentage, and cost per sqft.")
+        html += _email_kpi_grid([
+            ("Total Marketing Spend", _fmt_money(total_marketing_spend), f"{_fmt_pct(marketing_spend_pct_agreement)} of Agreement Value", "rose"),
+            ("This Month Spend", _fmt_money(this_month_marketing_spend), TODAY.strftime("%B %Y"), "blue"),
+            ("Recurring Spend", _fmt_money(recurring_marketing_spend), f"{_fmt_pct(recurring_spend_pct_agreement)} of Agreement Value", "amber"),
+            ("Marketing Cost / Sqft", _fmt_money(marketing_spend_per_sqft), f"Recurring: {_fmt_money(recurring_spend_per_sqft)}", "green"),
+            ("Marketing Cost / Booking", _fmt_money(marketing_cost_per_booking), "Total spend / bookings", "gray"),
+            ("Recurring Cost / Booking", _fmt_money(recurring_cost_per_booking), "Recurring spend / bookings", "gray"),
+        ])
+        html += _email_chart("Month-wise Marketing Spend", image_cids.get("Month-wise Marketing Spend"))
 
-                <h2>Wing-wise Collection Summary</h2>
-                {_df_to_email_table(wing_email_df, max_rows=20)}
+        html += _email_section("📆 Daily Visits, Calls & Conversion Summary", "Visits, revisits, calls, call answer rate, and conversion ratios.")
+        html += _email_kpi_grid([
+            ("Total Visits", f"{int(total_visits):,}", "From Daily Visits", "blue"),
+            ("Total Revisits", f"{int(total_revisits):,}", f"{_fmt_pct(revisit_to_visit_pct)} of visits", "purple"),
+            ("Total Calls", f"{int(total_calls):,}", f"Answered: {int(total_calls_answered):,}", "gray"),
+            ("Call Answer Rate", _fmt_pct(call_answer_rate), "Answered / total calls", "green"),
+            ("Calls → Visits", _fmt_pct(calls_to_visits_pct), "Attended visits / calls", "amber"),
+            ("Visits → Bookings", _fmt_pct(visit_to_booking_pct), "Bookings / total visits", "green"),
+            ("Daily Booking Entries", f"{int(total_daily_bookings):,}", "From daily visits table", "blue"),
+        ])
+        html += _email_chart("Month-wise Visits, Revisits & Calls", image_cids.get("Month-wise Visits, Revisits & Calls"))
 
-                <h2>Sales Target & Achievement</h2>
-                {_df_to_email_table(target_achievement_df, max_rows=30)}
+        html += _email_section("👥 Sales Executive Performance", "Call → visit → revisit → booking performance by executive.")
+        html += _df_to_email_table(exec_email_df, max_rows=50)
+        html += _email_chart("Executive-wise Calls, Visits, Revisits & Bookings", image_cids.get("Executive Performance"))
 
-                <h2>Stamp Duty Pending / Not Received</h2>
-                {_df_to_email_table(stamp_pending_month_exec_df, max_rows=80)}
+        html += _email_section("💰 Collection, Received, Due & Current Construction Stage", "Current stage is read directly from cashflow_slab_master.")
+        html += _email_kpi_grid([
+            ("Total Collection Till Date", _fmt_money(total_collection), "Based on completed slabs", "blue"),
+            ("Total Received Till Date", _fmt_money(total_cashflow_received), f"Received: {_fmt_pct(total_cashflow_received_pct)}", "green"),
+            ("Total Due Till Date", _fmt_money(total_cashflow_due), f"Due: {_fmt_pct(total_cashflow_due_pct)}", "amber"),
+            ("Booking Received Amount", _fmt_money(total_received_booking), "Received amount in bookings table", "purple"),
+        ])
+        html += _df_to_email_table(wing_email_df, max_rows=20)
 
-                <h2>Agreement Not Done Pending</h2>
-                {_df_to_email_table(agreement_pending_month_exec_df, max_rows=80)}
+        html += _email_section("🎯 Sales Target & Achievement", "This month target, achieved bookings, and next month target.")
+        html += _email_kpi_grid([
+            ("Current Month", THIS_MONTH_LABEL, "Target month", "blue"),
+            ("This Month Target", f"{current_month_total_target:,}", "Team total", "amber"),
+            ("This Month Achieved", f"{current_month_total_achieved:,}", f"{_fmt_pct(current_month_achievement_pct)} achieved", "green"),
+            ("Next Month Target", f"{next_month_total_target:,}", NEXT_MONTH_LABEL, "purple"),
+        ])
+        html += _df_to_email_table(target_email_df, max_rows=50)
+
+        html += _email_section("📈 Month-wise Booking Trend", "Booking trend based on booking date only.")
+        html += _email_chart("Month-wise Bookings", image_cids.get("Month-wise Bookings"))
+
+        html += """
             </div>
         </body>
         </html>
         """
+
+        return html
 
     def _send_summary_email():
         email_cfg = {}
@@ -27643,10 +27543,10 @@ with tab15:
         chart_specs = [
             ("Month-wise Bookings", "monthly_bookings", monthly_bookings_df),
             ("Wing-wise Inventory", "inventory", wing_inventory_df),
+            ("Wing-wise Type PSF", "wing_type_psf", wing_type_psf_df),
             ("Month-wise Marketing Spend", "monthly_marketing", monthly_marketing_df),
             ("Executive Performance", "exec_summary", exec_summary_df),
             ("Month-wise Visits, Revisits & Calls", "visit_call", monthly_visit_call_df),
-            ("Sales Target vs Achievement", "target", target_achievement_df),
         ]
 
         image_cids = {}
@@ -27654,14 +27554,18 @@ with tab15:
 
         for title, chart_type, chart_df in chart_specs:
             cid = make_msgid(domain="prathamvihar.local")[1:-1]
-            image_cids[title] = cid
             png_bytes = _make_matplotlib_chart(chart_type, chart_df, title)
-            image_payloads.append((cid, png_bytes, f"{chart_type}.png"))
+
+            if png_bytes:
+                image_cids[title] = cid
+                image_payloads.append((cid, png_bytes, f"{chart_type}.png"))
 
         html_body = _build_email_html(image_cids)
 
+        current_month_subject = datetime.datetime.now().strftime("%B %y")
+
         msg = MIMEMultipart("related")
-        msg["Subject"] = f"{subject_prefix} — {datetime.datetime.now().strftime('%d %b %Y')}"
+        msg["Subject"] = f"{subject_prefix} — {current_month_subject}"
         msg["From"] = sender_email
         msg["To"] = ", ".join(recipients)
         msg["Date"] = formatdate(localtime=True)
@@ -27688,7 +27592,7 @@ with tab15:
     # ============================================================
     # EMAIL BUTTON
     # ============================================================
-    section_card("📧 Send Complete Summary on Email", "Sends KPI cards, graphs with values, colored tables, pending tables, target achievement, and cashflow stage summary.")
+    section_card("📧 Send Complete Summary on Email", "Sends the same section-wise structure with colored KPI cards, graphs, and styled tables.")
 
     if st.button("📧 Send Complete Site Summary Email", type="primary", use_container_width=True):
         with st.spinner("Preparing and sending summary email..."):
