@@ -24978,10 +24978,6 @@ with tab13:
                 })
 
                 st.dataframe(wing_due_df, use_container_width=True, height=460)
-
-# ============================================================
-# TAB 17 — Sales Executive Monthly Booking Targets
-# ============================================================
 with tab14:
     import re
     import datetime
@@ -24990,7 +24986,7 @@ with tab14:
     import streamlit as st
 
     st.header("🎯 Sales Executive Monthly Booking Targets")
-    st.caption("Enter this month’s booking target for every Sales Executive. Once submitted, targets are locked until next month.")
+    st.caption("Submit this month’s booking targets once. After submission, the month is locked.")
 
     # ============================================================
     # SUPABASE CONNECTION
@@ -25004,18 +25000,15 @@ with tab14:
     SALES_TARGET_TABLE = "sales_targets"
     BOOKINGS_TABLE = "bookings"
 
-    # ============================================================
-    # FIXED SALES EXECUTIVE LIST
-    # ============================================================
     SALES_EXECUTIVES = [
-        "Tejas P",
-        "Ashutosh S",
-        "Komal K",
-        "Sailee D",
-        "Harshal S",
-        "Alok R",
-        "Sagar B",
-        "Advait M",
+        {"name": "Tejas P", "col": "tejas_p"},
+        {"name": "Ashutosh S", "col": "ashutosh_s"},
+        {"name": "Komal K", "col": "komal_k"},
+        {"name": "Sailee D", "col": "sailee_d"},
+        {"name": "Harshal S", "col": "harshal_s"},
+        {"name": "Alok R", "col": "alok_r"},
+        {"name": "Sagar B", "col": "sagar_b"},
+        {"name": "Advait M", "col": "advait_m"},
     ]
 
     # ============================================================
@@ -25040,29 +25033,38 @@ with tab14:
     def _col(df: pd.DataFrame, *names):
         if df is None or df.empty:
             return None
+
         cmap = {_norm_col(c): c for c in df.columns}
+
         for name in names:
             key = _norm_col(name)
             if key in cmap:
                 return cmap[key]
+
         return None
 
     def _to_num(x):
         try:
             if x is None or pd.isna(x):
                 return 0.0
+
             s = str(x).replace("₹", "").replace("Rs.", "").replace("Rs", "").replace(",", "").strip()
+
             if s == "":
                 return 0.0
+
             return float(s)
+
         except Exception:
             return 0.0
 
     def _pct(num, den):
         den = _to_num(den)
         num = _to_num(num)
+
         if den <= 0:
             return 0.0
+
         return (num / den) * 100.0
 
     def _fmt_pct(x):
@@ -25071,83 +25073,8 @@ with tab14:
         except Exception:
             return "0.0%"
 
-    def _get_current_user_email():
-        for key in [
-            "pv_user_email",
-            "user_email",
-            "auth_email",
-            "logged_in_email",
-            "email",
-        ]:
-            val = st.session_state.get(key)
-            if val:
-                return str(val).strip().lower()
-
-        try:
-            user_resp = supabase_client.auth.get_user()
-            user_obj = getattr(user_resp, "user", None)
-            email = getattr(user_obj, "email", None)
-            if email:
-                return str(email).strip().lower()
-        except Exception:
-            pass
-
-        return ""
-
     def _parse_date_series(series):
         return pd.to_datetime(series, errors="coerce", dayfirst=True)
-
-    def _month_start_from_date(dt):
-        if pd.isna(dt):
-            return None
-        return datetime.date(int(dt.year), int(dt.month), 1)
-
-    def _num_series(df, col):
-        if df is None or df.empty or not col or col not in df.columns:
-            return pd.Series(dtype=float)
-        return pd.to_numeric(
-            df[col].astype(str)
-            .str.replace("₹", "", regex=False)
-            .str.replace(",", "", regex=False)
-            .str.strip(),
-            errors="coerce"
-        ).fillna(0.0)
-
-    def _sb_select_all(table_name: str, order_col: str = "id") -> list[dict]:
-        rows = []
-        page_size = 1000
-        start = 0
-
-        while True:
-            query = supabase_client.table(table_name).select("*")
-
-            if order_col:
-                try:
-                    query = query.order(order_col)
-                except Exception:
-                    pass
-
-            res = query.range(start, start + page_size - 1).execute()
-            batch = getattr(res, "data", None) or []
-            rows.extend(batch)
-
-            if len(batch) < page_size:
-                break
-
-            start += page_size
-
-        return rows
-
-    def _load_table(table_name: str) -> pd.DataFrame:
-        try:
-            rows = _sb_select_all(table_name)
-            return pd.DataFrame(rows)
-        except Exception as e:
-            st.warning(f"Could not load `{table_name}`: {e}")
-            return pd.DataFrame()
-
-    def _insert_sales_targets(rows: list[dict]):
-        return supabase_client.table(SALES_TARGET_TABLE).insert(rows).execute()
 
     def _style_table(df):
         return (
@@ -25166,24 +25093,58 @@ with tab14:
                     "selector": "td",
                     "props": [
                         ("text-align", "center"),
+                        ("font-weight", "700"),
                     ],
                 },
             ])
         )
 
+    @st.cache_data(ttl=180, show_spinner=False)
+    def _sb_select_all(table_name: str, order_col: str | None = None) -> list[dict]:
+        rows = []
+        page_size = 1000
+        start = 0
+
+        while True:
+            query = supabase_client.table(table_name).select("*")
+
+            if order_col:
+                try:
+                    query = query.order(order_col)
+                except Exception:
+                    pass
+
+            res = query.range(start, start + page_size - 1).execute()
+            batch = getattr(res, "data", None) or []
+
+            rows.extend(batch)
+
+            if len(batch) < page_size:
+                break
+
+            start += page_size
+
+        return rows
+
+    def _load_table(table_name: str, order_col: str | None = None) -> pd.DataFrame:
+        try:
+            rows = _sb_select_all(table_name, order_col)
+            return pd.DataFrame(rows)
+        except Exception as e:
+            st.warning(f"Could not load `{table_name}`: {e}")
+            return pd.DataFrame()
+
+    def _insert_sales_target(row: dict):
+        return supabase_client.table(SALES_TARGET_TABLE).insert(row).execute()
+
     # ============================================================
     # CURRENT MONTH
     # ============================================================
     today = datetime.date.today()
-    current_month_start = today.replace(day=1)
-    current_month_start_str = current_month_start.isoformat()
-    current_month_label = current_month_start.strftime("%B %y").upper()
+    current_month_label = today.strftime("%B %y").upper()
 
-    current_user_email = _get_current_user_email()
-
-    if not current_user_email:
-        st.error("User email not found in session. Please make sure OTP login stores the logged-in email.")
-        st.stop()
+    # Example: APRIL 25
+    # This is stored in sales_targets.month
 
     # ============================================================
     # CSS
@@ -25202,6 +25163,7 @@ with tab14:
             margin: 22px 0 16px 0;
             box-shadow: 0 12px 26px rgba(37, 99, 235, 0.25);
         }
+
         .target-kpi {
             background: #ffffff;
             border: 1px solid #e2e8f0;
@@ -25212,6 +25174,7 @@ with tab14:
             box-shadow: 0 8px 18px rgba(15,23,42,.06);
             margin-bottom: 12px;
         }
+
         .target-kpi h4 {
             margin: 0;
             font-size: 12px;
@@ -25220,12 +25183,14 @@ with tab14:
             text-transform: uppercase;
             letter-spacing: .04em;
         }
+
         .target-kpi p {
             margin: 8px 0 0;
-            font-size: 26px;
+            font-size: 28px;
             color: #0f172a;
             font-weight: 900;
         }
+
         .target-kpi span {
             display: block;
             margin-top: 6px;
@@ -25233,17 +25198,21 @@ with tab14:
             color: #64748b;
             font-weight: 700;
         }
+
         .target-blue { background: #eff6ff; }
         .target-green { background: #ecfdf5; }
         .target-amber { background: #fff7ed; }
-        .target-rose { background: #fff1f2; }
+        .target-red { background: #fef2f2; }
         </style>
         """,
         unsafe_allow_html=True
     )
 
     def section_card(title):
-        st.markdown(f"<div class='target-section-card'>{title}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='target-section-card'>{title}</div>",
+            unsafe_allow_html=True
+        )
 
     def kpi_card(title, value, sub="", tone="target-blue"):
         st.markdown(
@@ -25268,7 +25237,7 @@ with tab14:
     bookings_df = _load_table(BOOKINGS_TABLE)
 
     # ============================================================
-    # PREPARE BOOKINGS DATA — USE BOOKING DATE, NOT MONTH COLUMN
+    # BOOKING ACHIEVED DATA — USE DATE COLUMN ONLY
     # ============================================================
     b_date_col = _col(bookings_df, "booking_date", "date", "Date")
     b_sales_exec_col = _col(bookings_df, "sales_executive", "Sales Executive")
@@ -25278,12 +25247,10 @@ with tab14:
 
         if b_date_col:
             bookings_work["_BookingDate"] = _parse_date_series(bookings_work[b_date_col])
-            bookings_work["_MonthStart"] = bookings_work["_BookingDate"].apply(_month_start_from_date)
-            bookings_work["_MonthStartStr"] = bookings_work["_MonthStart"].astype(str)
+            bookings_work["_Month"] = bookings_work["_BookingDate"].dt.strftime("%B %y").str.upper()
         else:
             bookings_work["_BookingDate"] = pd.NaT
-            bookings_work["_MonthStart"] = None
-            bookings_work["_MonthStartStr"] = ""
+            bookings_work["_Month"] = ""
 
         if b_sales_exec_col:
             bookings_work["_SalesExecutive"] = bookings_work[b_sales_exec_col].fillna("").astype(str).str.strip()
@@ -25291,75 +25258,98 @@ with tab14:
             bookings_work["_SalesExecutive"] = ""
 
         bookings_work = bookings_work[
-            bookings_work["_MonthStart"].notna() &
+            bookings_work["_BookingDate"].notna() &
             bookings_work["_SalesExecutive"].ne("")
         ].copy()
+
     else:
         bookings_work = pd.DataFrame()
 
-    # ============================================================
-    # CURRENT MONTH TARGET ROWS
-    # ============================================================
-    if not targets_df.empty:
-        tdf = targets_df.copy()
+    # Current month achieved bookings
+    if not bookings_work.empty:
+        current_month_bookings = bookings_work[
+            bookings_work["_Month"] == current_month_label
+        ].copy()
 
-        if "month_start" not in tdf.columns:
-            tdf["month_start"] = ""
-
-        if "sales_executive" not in tdf.columns:
-            tdf["sales_executive"] = ""
-
-        if "target_bookings" not in tdf.columns:
-            tdf["target_bookings"] = 0
-
-        tdf["month_start"] = tdf["month_start"].astype(str)
-        tdf["sales_executive"] = tdf["sales_executive"].fillna("").astype(str).str.strip()
-        tdf["target_bookings"] = pd.to_numeric(tdf["target_bookings"], errors="coerce").fillna(0).astype(int)
-
-        current_targets_df = tdf[tdf["month_start"] == current_month_start_str].copy()
+        achieved_df = (
+            current_month_bookings
+            .groupby("_SalesExecutive", as_index=False)
+            .size()
+            .rename(columns={
+                "_SalesExecutive": "Sales Executive",
+                "size": "Achieved",
+            })
+        )
     else:
-        current_targets_df = pd.DataFrame()
-
-    month_is_locked = not current_targets_df.empty
+        achieved_df = pd.DataFrame(columns=["Sales Executive", "Achieved"])
 
     # ============================================================
-    # FORM — ALL SALES EXECUTIVES IN ONE PLACE
+    # CURRENT MONTH TARGET ROW
     # ============================================================
-    section_card(f"🎯 Booking Targets for {current_month_label}")
+    if not targets_df.empty and "month" in targets_df.columns:
+        targets_work = targets_df.copy()
+        targets_work["month"] = targets_work["month"].fillna("").astype(str).str.strip().str.upper()
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        kpi_card("Current Month", current_month_label, "Target month", "target-blue")
-    with c2:
-        kpi_card("Logged In User", current_user_email, "Target submitted by", "target-green")
-    with c3:
-        kpi_card("Status", "Locked" if month_is_locked else "Open", "Unlocks automatically next month", "target-rose" if month_is_locked else "target-amber")
+        current_target_rows = targets_work[
+            targets_work["month"] == current_month_label
+        ].copy()
+    else:
+        targets_work = pd.DataFrame()
+        current_target_rows = pd.DataFrame()
+
+    month_is_locked = not current_target_rows.empty
+
+    # ============================================================
+    # TARGET SUMMARY
+    # ============================================================
+    target_row = {}
 
     if month_is_locked:
-        st.info("Targets for this month are already submitted. They are locked until next month.")
+        target_row = current_target_rows.iloc[0].to_dict()
 
-        locked_display = current_targets_df.copy()
+    total_target = 0
 
-        keep_cols = [
-            c for c in [
-                "month",
-                "month_start",
-                "sales_executive",
-                "target_bookings",
-                "set_by_email",
-                "locked_at",
-            ] if c in locked_display.columns
-        ]
+    if target_row:
+        for ex in SALES_EXECUTIVES:
+            total_target += int(_to_num(target_row.get(ex["col"], 0)))
 
-        locked_display = locked_display[keep_cols].copy()
-        locked_display = locked_display.rename(columns={
-            "month": "Month",
-            "month_start": "Month Start",
-            "sales_executive": "Sales Executive",
-            "target_bookings": "Target Bookings",
-            "set_by_email": "Set By",
-            "locked_at": "Locked At",
-        })
+    total_achieved = int(achieved_df["Achieved"].sum()) if not achieved_df.empty else 0
+    total_pending = max(total_target - total_achieved, 0)
+    achievement_pct = _pct(total_achieved, total_target)
+
+    # ============================================================
+    # KPI CARDS
+    # ============================================================
+    section_card(f"🎯 {current_month_label} Target Summary")
+
+    k1, k2, k3 = st.columns(3)
+
+    with k1:
+        kpi_card("Month", current_month_label, "Current target month", "target-blue")
+
+    with k2:
+        kpi_card("Target", f"{total_target:,}", "Total booking target", "target-amber")
+
+    with k3:
+        kpi_card("Achieved", f"{total_achieved:,}", f"Pending: {total_pending:,} | {_fmt_pct(achievement_pct)}", "target-green")
+
+    # ============================================================
+    # TARGET ENTRY FORM
+    # ============================================================
+    section_card("📝 Monthly Target Entry")
+
+    if month_is_locked:
+        st.info("This month’s target is already submitted and locked.")
+
+        locked_rows = []
+
+        for ex in SALES_EXECUTIVES:
+            locked_rows.append({
+                "Sales Executive": ex["name"],
+                "Target": int(_to_num(target_row.get(ex["col"], 0))),
+            })
+
+        locked_display = pd.DataFrame(locked_rows)
 
         st.dataframe(
             _style_table(locked_display),
@@ -25368,26 +25358,24 @@ with tab14:
         )
 
     else:
-        st.warning("Fill booking target count for each Sales Executive and submit once. After submission, this month will be locked.")
+        st.warning("Enter target booking count for every Sales Executive. Once submitted, this month will be locked.")
 
         with st.form("sales_exec_monthly_targets_form", clear_on_submit=False):
-            st.markdown("### Enter Booking Count Target")
-
             target_values = {}
 
-            for exec_name in SALES_EXECUTIVES:
-                col_name, col_target = st.columns([2, 1])
+            for ex in SALES_EXECUTIVES:
+                c1, c2 = st.columns([2, 1])
 
-                with col_name:
-                    st.markdown(f"**{exec_name}**")
+                with c1:
+                    st.markdown(f"**{ex['name']}**")
 
-                with col_target:
-                    target_values[exec_name] = st.number_input(
-                        "Booking Count Target",
+                with c2:
+                    target_values[ex["col"]] = st.number_input(
+                        "Target",
                         min_value=0,
                         step=1,
                         value=0,
-                        key=f"target_booking_count_{exec_name.replace(' ', '_').lower()}",
+                        key=f"target_{ex['col']}",
                         label_visibility="collapsed"
                     )
 
@@ -25397,110 +25385,59 @@ with tab14:
             )
 
         if submit_targets:
-            rows_to_insert = []
+            row_to_insert = {
+                "month": current_month_label,
+            }
 
-            for exec_name in SALES_EXECUTIVES:
-                target_count = int(target_values.get(exec_name, 0) or 0)
-
-                rows_to_insert.append({
-                    "month_start": current_month_start_str,
-                    "month": current_month_label,
-                    "sales_executive": exec_name,
-                    "target_bookings": target_count,
-                    "set_by_email": current_user_email,
-                    "locked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                })
+            for ex in SALES_EXECUTIVES:
+                row_to_insert[ex["col"]] = int(target_values.get(ex["col"], 0) or 0)
 
             try:
-                _insert_sales_targets(rows_to_insert)
-                st.success("✅ Monthly targets submitted and locked successfully.")
+                _insert_sales_target(row_to_insert)
                 st.cache_data.clear()
+                st.success("✅ Monthly targets submitted and locked successfully.")
                 st.rerun()
 
             except Exception as e:
-                st.error(f"Could not save targets. They may already be submitted for this month. Error: {e}")
+                st.error(f"Could not save targets. Target for this month may already exist. Error: {e}")
 
     # ============================================================
-    # TARGET VS ACHIEVED — CURRENT MONTH
+    # TARGET VS ACHIEVED TABLE
     # ============================================================
-    section_card(f"📊 {current_month_label} Target vs Achieved")
+    section_card("📊 Target vs Achieved")
 
-    if current_targets_df.empty:
-        st.info("No target data available yet for this month.")
-    else:
-        if not bookings_work.empty:
-            current_actuals = bookings_work[bookings_work["_MonthStartStr"] == current_month_start_str].copy()
+    rows = []
 
-            actual_summary = (
-                current_actuals
-                .groupby("_SalesExecutive", as_index=False)
-                .size()
-                .rename(columns={
-                    "_SalesExecutive": "sales_executive",
-                    "size": "achieved_bookings"
-                })
-            )
-        else:
-            actual_summary = pd.DataFrame(columns=["sales_executive", "achieved_bookings"])
+    for ex in SALES_EXECUTIVES:
+        target_val = int(_to_num(target_row.get(ex["col"], 0))) if target_row else 0
 
-        perf_df = current_targets_df.merge(
-            actual_summary,
-            on="sales_executive",
-            how="left"
-        )
+        achieved_match = achieved_df[
+            achieved_df["Sales Executive"].astype(str).str.strip().str.casefold() == ex["name"].casefold()
+        ]
 
-        perf_df["achieved_bookings"] = pd.to_numeric(
-            perf_df.get("achieved_bookings", 0),
-            errors="coerce"
-        ).fillna(0).astype(int)
+        achieved_val = int(achieved_match["Achieved"].sum()) if not achieved_match.empty else 0
 
-        perf_df["target_bookings"] = pd.to_numeric(
-            perf_df.get("target_bookings", 0),
-            errors="coerce"
-        ).fillna(0).astype(int)
-
-        perf_df["pending_bookings"] = (perf_df["target_bookings"] - perf_df["achieved_bookings"]).clip(lower=0)
-
-        perf_df["achievement_percent"] = perf_df.apply(
-            lambda r: _pct(r["achieved_bookings"], r["target_bookings"]),
-            axis=1
-        )
-
-        display_df = perf_df[[
-            "sales_executive",
-            "target_bookings",
-            "achieved_bookings",
-            "pending_bookings",
-            "achievement_percent",
-        ]].copy()
-
-        display_df = display_df.rename(columns={
-            "sales_executive": "Sales Executive",
-            "target_bookings": "Target Bookings",
-            "achieved_bookings": "Achieved Bookings",
-            "pending_bookings": "Pending Bookings",
-            "achievement_percent": "Achievement %",
+        rows.append({
+            "Sales Executive": ex["name"],
+            "Target": target_val,
+            "Achieved": achieved_val,
+            "Pending": max(target_val - achieved_val, 0),
+            "Achievement %": _fmt_pct(_pct(achieved_val, target_val)),
         })
 
-        display_df["Achievement %"] = display_df["Achievement %"].apply(_fmt_pct)
+    performance_df = pd.DataFrame(rows)
 
-        st.dataframe(
-            _style_table(display_df),
-            use_container_width=True,
-            hide_index=True
-        )
+    st.dataframe(
+        _style_table(performance_df),
+        use_container_width=True,
+        hide_index=True
+    )
 
-        chart_df = perf_df[[
-            "sales_executive",
-            "target_bookings",
-            "achieved_bookings",
-        ]].copy()
-
-        chart_df = chart_df.rename(columns={
-            "sales_executive": "Sales Executive",
-            "target_bookings": "Target",
-            "achieved_bookings": "Achieved",
-        })
+    # ============================================================
+    # GRAPH — TARGET VS ACHIEVED
+    # ============================================================
+    if not performance_df.empty:
+        chart_df = performance_df[["Sales Executive", "Target", "Achieved"]].copy()
 
         chart_long = chart_df.melt(
             id_vars="Sales Executive",
@@ -25523,7 +25460,7 @@ with tab14:
             ]
         ).properties(
             height=360,
-            title="Target vs Achieved Bookings"
+            title="Current Month — Target vs Achieved"
         )
 
         labels = alt.Chart(chart_long).mark_text(
@@ -25539,53 +25476,6 @@ with tab14:
         )
 
         st.altair_chart(bar + labels, use_container_width=True)
-
-    # ============================================================
-    # HISTORY
-    # ============================================================
-    section_card("📅 Target History")
-
-    if targets_df.empty:
-        st.info("No target history available.")
-    else:
-        history_df = targets_df.copy()
-
-        keep_cols = [
-            c for c in [
-                "month",
-                "month_start",
-                "sales_executive",
-                "target_bookings",
-                "set_by_email",
-                "locked_at",
-            ] if c in history_df.columns
-        ]
-
-        history_df = history_df[keep_cols].copy()
-        history_df = history_df.rename(columns={
-            "month": "Month",
-            "month_start": "Month Start",
-            "sales_executive": "Sales Executive",
-            "target_bookings": "Target Bookings",
-            "set_by_email": "Set By",
-            "locked_at": "Locked At",
-        })
-
-        st.dataframe(
-            _style_table(history_df),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        csv_bytes = history_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Download Target History CSV",
-            data=csv_bytes,
-            file_name="sales_target_history.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-
 with tab15:
     import re
     import io
