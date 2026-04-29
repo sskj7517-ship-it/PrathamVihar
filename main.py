@@ -25441,14 +25441,14 @@ with tab15:
         """
         PSF business rule:
         Use agreement_cost and carpet_area only.
-        Formula: (agreement_cost / carpet_area) * 1.38
+        Formula: agreement_cost / (carpet_area * 1.38)
         Do not use or average the rate column.
         """
         agreement = _to_num(agreement_cost)
         carpet = _to_num(carpet_area)
         if agreement <= 0 or carpet <= 0:
             return 0.0
-        return (agreement / carpet) * 1.38
+        return agreement / (carpet * 1.38)
 
     def _psf_from_df(df: pd.DataFrame):
         if df is None or df.empty:
@@ -27024,7 +27024,7 @@ with tab15:
     with b3:
         kpi_card("Total Agreement Cost Sold", _fmt_money(total_agreement_value), "Agreement cost sold", "ss-blue")
     with b4:
-        kpi_card("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Agreement cost / carpet area × 1.38", "ss-amber")
+        kpi_card("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Agreement cost / (carpet area × 1.38)", "ss-amber")
 
     b5, b6, b7, b8 = st.columns(4)
     with b5:
@@ -27257,7 +27257,7 @@ with tab15:
         exec_psf_df,
         "Avg PSF",
         lambda x: _fmt_psf(x),
-        "Agreement cost / carpet area × 1.38",
+        "Agreement cost / (carpet area × 1.38)",
         "ss-amber",
     )
 
@@ -27643,7 +27643,7 @@ with tab15:
             ("Total Bookings", f"{total_bookings:,}", f"Distinct sold units: {sold_units_distinct:,}", "ss-blue"),
             ("Total Carpet Area Sold", f"{total_carpet_area:,.0f} sqft", "Carpet area", "ss-green"),
             ("Total Agreement Cost Sold", _fmt_money(total_agreement_value), "Agreement cost sold", "ss-blue"),
-            ("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Agreement cost / carpet area × 1.38", "ss-amber"),
+            ("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Agreement cost / (carpet area × 1.38)", "ss-amber"),
         ]
         booking_cards_row_2 = [
             ("Overall Avg Conversion Period", f"{avg_conversion_days:.1f} days", "First visit to booking", "ss-purple"),
@@ -27933,7 +27933,7 @@ with tab15:
                 {email_kpi_grid(daily_cards_row_1, cols=4)}
                 {email_kpi_grid(daily_cards_row_2, cols=3)}
                 <h3>💸 Sales Executive-wise Avg PSF Rate</h3>
-                {email_exec_metric_cards(exec_psf_df, "Avg PSF", lambda x: _fmt_psf(x), "Agreement cost / carpet area × 1.38", "ss-amber")}
+                {email_exec_metric_cards(exec_psf_df, "Avg PSF", lambda x: _fmt_psf(x), "Agreement cost / (carpet area × 1.38)", "ss-amber")}
                 <h3>⏱️ Sales Executive-wise Avg Conversion Days</h3>
                 {email_exec_metric_cards(exec_conversion_days_df, "Avg Conversion Days", lambda x: f"{_to_num(x):.1f} days" if _to_num(x) > 0 else "—", "Average booking conversion period", "ss-purple")}
                 {email_chart("Month-wise Visits, Revisits & Calls")}
