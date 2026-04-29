@@ -25908,7 +25908,7 @@ with tab15:
         bookings_work.loc[bookings_work["_StampPctNum"] <= 0, "_StampPctNum"] = 7.0
         bookings_work["_StampDutyAmountEst"] = bookings_work["_AgreementCostNum"] * bookings_work["_StampPctNum"] / 100.0
 
-        computed_psf = bookings_work.apply(
+        bookings_work["_PSF"] = bookings_work.apply(
             lambda r: (
                 r["_AgreementCostNum"] / (r["_CarpetNum"] * 1.38)
                 if r["_CarpetNum"] > 0 and r["_AgreementCostNum"] > 0
@@ -25916,8 +25916,6 @@ with tab15:
             ),
             axis=1,
         )
-        bookings_work["_PSF"] = bookings_work["_RateNum"]
-        bookings_work.loc[bookings_work["_PSF"] <= 0, "_PSF"] = computed_psf
 
         def _type_for_appreciation(v):
             s = _safe_str(v).upper().replace(" ", "")
@@ -26409,6 +26407,34 @@ with tab15:
         ])
     )
 
+    if not bookings_work.empty:
+        exec_psf_df = (
+            bookings_work[
+                bookings_work["_SalesExecutive"].astype(str).str.strip().ne("") &
+                bookings_work["_PSF"].gt(0)
+            ]
+            .groupby("_SalesExecutive", as_index=False)["_PSF"]
+            .mean()
+            .rename(columns={"_SalesExecutive": "Sales Executive", "_PSF": "Avg PSF"})
+            .sort_values("Avg PSF", ascending=False)
+            .reset_index(drop=True)
+        )
+
+        exec_conversion_days_df = (
+            bookings_work[
+                bookings_work["_SalesExecutive"].astype(str).str.strip().ne("") &
+                bookings_work["_ConversionDaysNum"].gt(0)
+            ]
+            .groupby("_SalesExecutive", as_index=False)["_ConversionDaysNum"]
+            .mean()
+            .rename(columns={"_SalesExecutive": "Sales Executive", "_ConversionDaysNum": "Avg Conversion Days"})
+            .sort_values("Avg Conversion Days")
+            .reset_index(drop=True)
+        )
+    else:
+        exec_psf_df = pd.DataFrame(columns=["Sales Executive", "Avg PSF"])
+        exec_conversion_days_df = pd.DataFrame(columns=["Sales Executive", "Avg Conversion Days"])
+
     if not daily_df.empty:
         dv_work = daily_df.copy()
         month_pairs = dv_work.apply(
@@ -26804,6 +26830,9 @@ with tab15:
             else:
                 status = "Pending"
 
+            if this_target <= 0 and achieved <= 0 and next_target <= 0:
+                continue
+
             rows.append({
                 "Sales Executive": exec_name,
                 "This Month Target": int(this_target),
@@ -26868,9 +26897,9 @@ with tab15:
 
         return (line + labels).properties(height=height, title=title)
 
-    def grouped_bar_with_labels(df, x, y, group, title, height=360):
+    def grouped_bar_with_labels(df, x, y, group, title, x_sort=None, height=360):
         bars = alt.Chart(df).mark_bar().encode(
-            x=alt.X(f"{x}:N", title=x),
+            x=alt.X(f"{x}:N", sort=x_sort, title=x),
             xOffset=alt.XOffset(f"{group}:N"),
             y=alt.Y(f"{y}:Q", title=y),
             color=alt.Color(f"{group}:N"),
@@ -26886,7 +26915,7 @@ with tab15:
             fontSize=9,
             fontWeight="bold"
         ).encode(
-            x=alt.X(f"{x}:N"),
+            x=alt.X(f"{x}:N", sort=x_sort),
             xOffset=alt.XOffset(f"{group}:N"),
             y=alt.Y(f"{y}:Q"),
             text=alt.Text(f"{y}:Q", format=",.0f"),
@@ -26894,6 +26923,23 @@ with tab15:
         )
 
         return (bars + labels).properties(height=height, title=title)
+
+    def render_exec_metric_kpis(df: pd.DataFrame, value_col: str, value_formatter, sub_text: str, tone="ss-gray"):
+        if df is None or df.empty:
+            st.info("No sales executive-wise data available.")
+            return
+
+        rows = df.to_dict("records")
+        for start in range(0, len(rows), 4):
+            cols = st.columns(4)
+            for idx, row in enumerate(rows[start:start + 4]):
+                with cols[idx]:
+                    kpi_card(
+                        _safe_str(row.get("Sales Executive", "—")),
+                        value_formatter(row.get(value_col, 0)),
+                        sub_text,
+                        tone,
+                    )
 
     # ============================================================
     # SECTION 1 — BOOKING SUMMARY
@@ -26966,15 +27012,13 @@ with tab15:
     # ============================================================
     section_card("✅ Agreement & Stamp Duty Status", "Separate status totals and pending tables by month and sales executive.")
 
-    a1, a2, a3, a4 = st.columns(4)
+    a1, a2, a3 = st.columns(3)
     with a1:
         kpi_card("Total Agreements", f"{total_bookings:,}", "All booked units", "ss-blue")
     with a2:
         kpi_card("Agreement Done", f"{total_agreement_done:,}", f"Pending: {total_agreement_pending:,}", "ss-green")
     with a3:
         kpi_card("Stamp Duty Received", f"{total_stamp_received:,}", f"Pending: {total_stamp_pending:,}", "ss-green")
-    with a4:
-        kpi_card("Estimated Stamp Duty Value", _fmt_money(total_stamp_duty_amount_est), "Agreement cost × stamp %", "ss-amber")
 
     st.markdown("### 🟠 Sales Executive-wise Month-wise Stamp Duty Pending / Not Received")
     if stamp_pending_month_exec_df.empty:
@@ -27118,7 +27162,7 @@ with tab15:
     # ============================================================
     # SECTION 5 — DAILY VISITS SUMMARY
     # ============================================================
-    section_card("📆 Daily Visits, Calls & Conversion Summary", "Visits, revisits, calls, call answer rate, and conversion ratios.")
+    section_card("📆 Sales Executive Daily visits , call & Conversion summary", "Visits, revisits, calls, call answer rate, conversion ratios, executive-wise PSF, and conversion days.")
 
     d1, d2, d3, d4 = st.columns(4)
     with d1:
@@ -27138,6 +27182,24 @@ with tab15:
     with d7:
         kpi_card("Daily Booking Entries", f"{int(total_daily_bookings):,}", "From daily visits table", "ss-blue")
 
+    st.markdown("### 💸 Sales Executive-wise Avg PSF Rate")
+    render_exec_metric_kpis(
+        exec_psf_df,
+        "Avg PSF",
+        lambda x: _fmt_psf(x),
+        "Agreement cost / (carpet area × 1.38)",
+        "ss-amber",
+    )
+
+    st.markdown("### ⏱️ Sales Executive-wise Avg Conversion Days")
+    render_exec_metric_kpis(
+        exec_conversion_days_df,
+        "Avg Conversion Days",
+        lambda x: f"{_to_num(x):.1f} days" if _to_num(x) > 0 else "—",
+        "Average booking conversion period",
+        "ss-purple",
+    )
+
     if not monthly_visit_call_df.empty:
         visit_long = monthly_visit_call_df[["Month", "Total Visits", "Total Revisits", "Total Calls"]].melt(
             id_vars="Month",
@@ -27150,7 +27212,8 @@ with tab15:
                 x="Month",
                 y="Count",
                 group="Metric",
-                title="Month-wise Visits, Revisits & Calls"
+                title="Month-wise Visits, Revisits & Calls",
+                x_sort=monthly_visit_call_df["Month"].tolist()
             ),
             use_container_width=True
         )
@@ -27281,66 +27344,6 @@ with tab15:
             },
         )
 
-        with st.expander("Detailed target progress cards", expanded=True):
-            for _, row in target_achievement_df.iterrows():
-                exec_name = row["Sales Executive"]
-                target = int(row["This Month Target"])
-                achieved = int(row["Achieved"])
-                pending = int(row["Pending"])
-                pct = float(row["Achievement %"])
-                next_target = int(row["Next Month Target"])
-                status = row["Status"]
-
-                if status == "Achieved":
-                    tone = "#ecfdf5"
-                    badge_bg = "#16a34a"
-                elif status == "On Track":
-                    tone = "#eff6ff"
-                    badge_bg = "#2563eb"
-                elif status == "Pending":
-                    tone = "#fff7ed"
-                    badge_bg = "#f97316"
-                else:
-                    tone = "#f8fafc"
-                    badge_bg = "#64748b"
-
-                st.markdown(
-                    f"""
-                    <div class="target-card" style="background:{tone};">
-                        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-                            <div>
-                                <div style="font-weight:900; font-size:18px; color:#0f172a;">{escape(exec_name)}</div>
-                                <div style="font-size:12px; color:#64748b; font-weight:700;">
-                                    Target: {target:,} | Achieved: {achieved:,} | Pending: {pending:,} | Next Month: {next_target:,}
-                                </div>
-                            </div>
-                            <div style="
-                                background:{badge_bg};
-                                color:white;
-                                padding:6px 12px;
-                                border-radius:999px;
-                                font-size:12px;
-                                font-weight:900;
-                            ">
-                                {escape(status)}
-                            </div>
-                        </div>
-                        <div style="margin-top:12px; background:#e5e7eb; height:12px; border-radius:999px; overflow:hidden;">
-                            <div style="
-                                width:{min(max(pct, 0), 100)}%;
-                                background:linear-gradient(135deg,#2563eb,#7c3aed);
-                                height:12px;
-                                border-radius:999px;
-                            "></div>
-                        </div>
-                        <div style="margin-top:6px; font-size:12px; font-weight:800; color:#334155;">
-                            {pct:.1f}% achieved
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
     # ============================================================
     # EMAIL REPORT HELPERS
     # ============================================================
@@ -27354,6 +27357,11 @@ with tab15:
     def _make_matplotlib_chart(chart_type: str, df: pd.DataFrame, title: str):
         import matplotlib.pyplot as plt
         import numpy as np
+
+        if df is not None and not df.empty:
+            df = df.copy()
+            if "_MonthSort" in df.columns:
+                df = df[df["_MonthSort"].astype(str).ne("9999-99")].sort_values("_MonthSort").copy()
 
         buf = io.BytesIO()
         fig, ax = plt.subplots(figsize=(11, 5.2))
@@ -27393,6 +27401,45 @@ with tab15:
             ax.bar_label(bars, padding=3, fontsize=8, fmt="%.0f")
             ax.set_ylabel("Marketing Spend")
             ax.set_xlabel("Month")
+            ax.tick_params(axis="x", rotation=35)
+
+        elif chart_type == "wing_type_psf":
+            plot_df = df[["Wing", "Type", "Avg PSF"]].copy()
+            x_labels = plot_df["Wing"].drop_duplicates().tolist()
+            type_labels = plot_df["Type"].drop_duplicates().tolist()
+            x = np.arange(len(x_labels))
+            width = 0.8 / max(len(type_labels), 1)
+            for idx, type_name in enumerate(type_labels):
+                vals = []
+                for wing in x_labels:
+                    hit = plot_df[plot_df["Wing"].eq(wing) & plot_df["Type"].eq(type_name)]
+                    vals.append(float(hit["Avg PSF"].iloc[0]) if not hit.empty else 0.0)
+                offset = (idx - (len(type_labels) - 1) / 2) * width
+                bars = ax.bar(x + offset, vals, width=width, label=type_name)
+                ax.bar_label(bars, padding=3, fontsize=7, fmt="%.0f")
+            ax.set_xticks(x)
+            ax.set_xticklabels(x_labels)
+            ax.set_ylabel("Avg PSF")
+            ax.legend()
+
+        elif chart_type == "wing_psf":
+            bars = ax.bar(df["Wing"], df["Avg PSF"])
+            ax.bar_label(bars, padding=3, fontsize=8, fmt="%.0f")
+            ax.set_ylabel("Avg PSF")
+            ax.set_xlabel("Wing")
+
+        elif chart_type == "type_psf":
+            bars = ax.bar(df["Type"], df["Avg PSF"])
+            ax.bar_label(bars, padding=3, fontsize=8, fmt="%.0f")
+            ax.set_ylabel("Avg PSF")
+            ax.set_xlabel("Type")
+
+        elif chart_type == "purpose_marketing":
+            plot_df = df.head(10).copy()
+            bars = ax.bar(plot_df["Purpose"].astype(str), plot_df["Amount"])
+            ax.bar_label(bars, padding=3, fontsize=8, fmt="%.0f")
+            ax.set_ylabel("Amount")
+            ax.set_xlabel("Purpose")
             ax.tick_params(axis="x", rotation=35)
 
         elif chart_type == "exec_summary":
@@ -27450,33 +27497,57 @@ with tab15:
         return buf.getvalue()
 
     def _build_email_html(image_cids: dict):
-        booking_cards = [
-            ("Total Bookings", f"{total_bookings:,}", f"Distinct sold units: {sold_units_distinct:,}"),
-            ("Agreement Done", f"{total_agreement_done:,}", f"Pending: {total_agreement_pending:,}"),
-            ("Stamp Duty Received", f"{total_stamp_received:,}", f"Pending: {total_stamp_pending:,}"),
-            ("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Rate / saleable"),
-            ("Units Left to Sell", f"{our_available_units:,}", f"Hold: {active_hold_count:,} | Lineup: {agreement_lineup_count:,}"),
-            ("Marketing Spend", _fmt_money(total_marketing_spend), f"{_fmt_pct(marketing_spend_pct_agreement)} of agreement value"),
-            ("Total Visits", f"{int(total_visits):,}", f"Revisits: {int(total_revisits):,}"),
-            ("Total Due", _fmt_money(total_cashflow_due), f"Due %: {_fmt_pct(total_cashflow_due_pct)}"),
-            ("This Month Target", f"{total_this_month_target:,}", f"Achieved: {total_this_month_achieved:,}"),
-        ]
-
-        cards_html = ""
-        for title, value, sub in booking_cards:
-            cards_html += f"""
-            <div class="card">
-                <div class="card-title">{escape(str(title))}</div>
-                <div class="card-value">{escape(str(value))}</div>
-                <div class="card-sub">{escape(str(sub))}</div>
+        def email_section(title, subtitle=""):
+            return f"""
+            <div class="email-section-card">
+                <h2>{escape(str(title))}</h2>
+                <p>{escape(str(subtitle))}</p>
             </div>
             """
 
-        chart_html = ""
-        for title, cid in image_cids.items():
-            chart_html += f"""
-            <h2>{escape(str(title))}</h2>
-            <img src="cid:{cid}" style="max-width:100%; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:18px;" />
+        def email_kpi_card(title, value, sub="", tone="ss-gray"):
+            return f"""
+            <div class="email-kpi {tone}">
+                <div class="email-kpi-title">{escape(str(title))}</div>
+                <div class="email-kpi-value">{escape(str(value))}</div>
+                <div class="email-kpi-sub">{escape(str(sub))}</div>
+            </div>
+            """
+
+        def email_kpi_grid(cards, cols=4):
+            if not cards:
+                return ""
+            return """
+            <div class="email-grid" style="grid-template-columns: repeat({cols}, minmax(0, 1fr));">
+                {cards_html}
+            </div>
+            """.format(
+                cols=cols,
+                cards_html="".join(email_kpi_card(*card) for card in cards),
+            )
+
+        def email_exec_metric_cards(df: pd.DataFrame, value_col: str, value_formatter, sub_text: str, tone="ss-gray"):
+            if df is None or df.empty:
+                return "<p class='email-empty'>No sales executive-wise data available.</p>"
+            cards = []
+            for _, row in df.iterrows():
+                cards.append((
+                    row.get("Sales Executive", "—"),
+                    value_formatter(row.get(value_col, 0)),
+                    sub_text,
+                    tone,
+                ))
+            return email_kpi_grid(cards, cols=4)
+
+        def email_chart(title):
+            cid = image_cids.get(title, "")
+            if not cid:
+                return ""
+            return f"""
+            <div class="email-chart-card">
+                <h3>{escape(str(title))}</h3>
+                <img src="cid:{cid}" />
+            </div>
             """
 
         exec_email_df = exec_summary_df.copy()
@@ -27498,6 +27569,92 @@ with tab15:
 
         generated_at = datetime.datetime.now().strftime("%d/%m/%Y %I:%M %p")
 
+        booking_cards_row_1 = [
+            ("Total Bookings", f"{total_bookings:,}", f"Distinct sold units: {sold_units_distinct:,}", "ss-blue"),
+            ("Total Carpet Area Sold", f"{total_carpet_area:,.0f} sqft", "Carpet area", "ss-green"),
+            ("Total Agreement Cost Sold", _fmt_money(total_agreement_value), "Agreement cost sold", "ss-blue"),
+            ("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Agreement / saleable area", "ss-amber"),
+        ]
+        booking_cards_row_2 = [
+            ("Overall Avg Conversion Period", f"{avg_conversion_days:.1f} days", "First visit to booking", "ss-purple"),
+            ("Average Visits for Booking", f"{avg_visits_for_booking:.1f}", "From Visit Count", "ss-purple"),
+            ("Average Booking / Month", f"{avg_booking_per_month:.2f}", "Based on booking date months", "ss-green"),
+            ("Total Units Sold", f"{sold_units_distinct:,}", "Distinct Wing + Flat", "ss-green"),
+        ]
+        appreciation_cards = [
+            (
+                "1 BHK Appreciation %",
+                _fmt_pct(app_1bhk["pct"]),
+                f"Lowest ({app_1bhk['lowest_month']}): {_fmt_psf(app_1bhk['lowest_psf'])} | Highest ({app_1bhk['highest_month']}): {_fmt_psf(app_1bhk['highest_psf'])}",
+                "ss-green",
+            ),
+            (
+                "2 BHK Appreciation %",
+                _fmt_pct(app_2bhk["pct"]),
+                f"Lowest ({app_2bhk['lowest_month']}): {_fmt_psf(app_2bhk['lowest_psf'])} | Highest ({app_2bhk['highest_month']}): {_fmt_psf(app_2bhk['highest_psf'])}",
+                "ss-green",
+            ),
+            (
+                "Overall Appreciation %",
+                _fmt_pct(app_overall["pct"]),
+                f"Lowest ({app_overall['lowest_month']}): {_fmt_psf(app_overall['lowest_psf'])} | Highest ({app_overall['highest_month']}): {_fmt_psf(app_overall['highest_psf'])}",
+                "ss-green",
+            ),
+        ]
+
+        agreement_cards = [
+            ("Total Agreements", f"{total_bookings:,}", "All booked units", "ss-blue"),
+            ("Agreement Done", f"{total_agreement_done:,}", f"Pending: {total_agreement_pending:,}", "ss-green"),
+            ("Stamp Duty Received", f"{total_stamp_received:,}", f"Pending: {total_stamp_pending:,}", "ss-green"),
+        ]
+
+        marketing_cards_row_1 = [
+            ("Total Marketing Spend", _fmt_money(total_marketing_spend), f"{_fmt_pct(marketing_spend_pct_agreement)} of Agreement Value", "ss-rose"),
+            ("This Month Spend", _fmt_money(this_month_marketing_spend), TODAY.strftime("%B %Y"), "ss-blue"),
+            ("Recurring Spend", _fmt_money(recurring_marketing_spend), f"{_fmt_pct(recurring_spend_pct_agreement)} of Agreement Value", "ss-amber"),
+            ("Marketing Cost / Sqft", _fmt_money(marketing_spend_per_sqft), f"Recurring: {_fmt_money(recurring_spend_per_sqft)}", "ss-green"),
+        ]
+        marketing_cards_row_2 = [
+            ("Marketing Cost / Booking", _fmt_money(marketing_cost_per_booking), "Total spend / bookings", "ss-gray"),
+            ("Recurring Cost / Booking", _fmt_money(recurring_cost_per_booking), "Recurring spend / bookings", "ss-gray"),
+        ]
+
+        daily_cards_row_1 = [
+            ("Total Visits", f"{int(total_visits):,}", "From Daily Visits", "ss-blue"),
+            ("Total Revisits", f"{int(total_revisits):,}", f"{_fmt_pct(revisit_to_visit_pct)} of visits", "ss-purple"),
+            ("Total Calls", f"{int(total_calls):,}", f"Answered: {int(total_calls_answered):,}", "ss-gray"),
+            ("Call Answer Rate", _fmt_pct(call_answer_rate), "Answered / total calls", "ss-green"),
+        ]
+        daily_cards_row_2 = [
+            ("Calls → Visits", _fmt_pct(calls_to_visits_pct), "Attended visits / calls", "ss-amber"),
+            ("Visits → Bookings", _fmt_pct(visit_to_booking_pct), "Bookings / total visits", "ss-green"),
+            ("Daily Booking Entries", f"{int(total_daily_bookings):,}", "From daily visits table", "ss-blue"),
+        ]
+
+        collection_cards = [
+            ("Total Collection Till Date", _fmt_money(total_collection), "Based on completed slabs", "ss-blue"),
+            ("Total Received Till Date", _fmt_money(total_cashflow_received), f"Received: {_fmt_pct(total_cashflow_received_pct)}", "ss-green"),
+            ("Total Due Till Date", _fmt_money(total_cashflow_due), f"Due: {_fmt_pct(total_cashflow_due_pct)}", "ss-amber"),
+            ("Booking Received Amount", _fmt_money(total_received_booking), "Received amount in bookings table", "ss-purple"),
+        ]
+
+        stage_cards = []
+        if not wing_summary_df.empty:
+            for _, wr in wing_summary_df.iterrows():
+                stage_cards.append((
+                    f"{wr['Wing']} Current Stage",
+                    wr["Current Stage"],
+                    f"Completed On: {wr['Stage Completed On'] or '—'}",
+                    "ss-gray",
+                ))
+
+        target_cards = [
+            ("Current Month", _month_label_from_key(THIS_MONTH_KEY), "Target month", "ss-blue"),
+            ("This Month Target", f"{total_this_month_target:,}", f"Next month: {total_next_month_target:,}", "ss-purple"),
+            ("Achieved", f"{total_this_month_achieved:,}", f"Pending: {total_this_month_pending:,}", "ss-green"),
+            ("Achievement %", _fmt_pct(total_target_achievement_pct), "Achieved / target", "ss-amber"),
+        ]
+
         return f"""
         <html>
         <head>
@@ -27507,81 +27664,161 @@ with tab15:
                     background: #f8fafc;
                     color: #0f172a;
                     padding: 18px;
+                    margin: 0;
                 }}
                 .shell {{
+                    max-width: 1180px;
+                    margin: 0 auto;
                     background: #ffffff;
-                    border-radius: 18px;
+                    border-radius: 20px;
                     padding: 22px;
                     border: 1px solid #e5e7eb;
+                    box-shadow: 0 8px 24px rgba(15,23,42,.06);
                 }}
                 h1 {{
                     margin: 0 0 4px 0;
-                    font-size: 26px;
+                    font-size: 28px;
                     text-align: center;
+                    color: #0f172a;
                 }}
-                h2 {{
-                    background: linear-gradient(135deg,#2563eb 0%,#7c3aed 100%);
-                    color: white;
-                    border-radius: 14px;
-                    padding: 12px;
-                    text-align: center;
-                    margin-top: 28px;
-                    font-size: 18px;
+                h3 {{
+                    margin: 0 0 12px 0;
+                    font-size: 16px;
+                    color: #0f172a;
                 }}
                 .muted {{
                     color: #64748b;
                     font-size: 13px;
                     margin-bottom: 18px;
                     text-align: center;
+                    font-weight: 700;
                 }}
-                .grid {{
-                    display: grid;
-                    grid-template-columns: repeat(3, minmax(0, 1fr));
-                    gap: 12px;
-                }}
-                .card {{
-                    border: 1px solid #e5e7eb;
-                    border-radius: 14px;
-                    padding: 14px;
-                    background: #f8fafc;
+                .email-section-card {{
+                    background: linear-gradient(135deg,#2563eb 0%,#7c3aed 100%);
+                    color: white;
+                    border-radius: 22px;
+                    padding: 22px 18px;
                     text-align: center;
+                    margin: 32px 0 16px 0;
+                    box-shadow: 0 12px 28px rgba(37,99,235,.18);
                 }}
-                .card-title {{
-                    font-size: 12px;
-                    font-weight: 800;
-                    color: #475569;
-                    text-transform: uppercase;
-                }}
-                .card-value {{
+                .email-section-card h2 {{
+                    margin: 0;
                     font-size: 24px;
                     font-weight: 900;
-                    margin-top: 8px;
-                    color: #0f172a;
+                    color: #ffffff;
                 }}
-                .card-sub {{
-                    font-size: 12px;
+                .email-section-card p {{
+                    margin: 8px 0 0 0;
+                    font-size: 13px;
                     font-weight: 700;
-                    color: #64748b;
-                    margin-top: 7px;
+                    opacity: .92;
+                }}
+                .email-grid {{
+                    display: grid;
+                    gap: 12px;
+                    margin: 10px 0 12px 0;
+                }}
+                .email-kpi {{
+                    border: 1px solid rgba(49,51,63,0.10);
+                    border-radius: 16px;
+                    padding: 14px 12px;
+                    text-align: center;
+                    min-height: 104px;
+                    box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+                    box-sizing: border-box;
+                }}
+                .email-kpi-title {{
+                    font-size: 12px;
+                    line-height: 1.2;
+                    font-weight: 800;
+                    color: rgba(49,51,63,0.78);
+                }}
+                .email-kpi-value {{
+                    font-size: 23px;
+                    line-height: 1.08;
+                    font-weight: 900;
+                    color: #111827;
+                    margin-top: 8px;
+                }}
+                .email-kpi-sub {{
+                    margin-top: 8px;
+                    font-size: 11.5px;
+                    line-height: 1.25;
+                    font-weight: 700;
+                    color: rgba(49,51,63,0.65);
+                }}
+                .ss-blue{{background:#eff6ff;}}
+                .ss-green{{background:#ecfdf5;}}
+                .ss-amber{{background:#fff7ed;}}
+                .ss-rose{{background:#fff1f2;}}
+                .ss-purple{{background:#f5f3ff;}}
+                .ss-gray{{background:#f8fafc;}}
+                .email-chart-row {{
+                    display: grid;
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                    gap: 14px;
+                    margin: 12px 0;
+                }}
+                .email-chart-card {{
+                    border: 1px solid #dbe4f0;
+                    border-radius: 16px;
+                    padding: 12px;
+                    background: #ffffff;
+                    box-shadow: 0 5px 16px rgba(15,23,42,.05);
+                    margin: 12px 0;
+                }}
+                .email-chart-card img {{
+                    max-width: 100%;
+                    width: 100%;
+                    border: 1px solid #e5e7eb;
+                    border-radius: 12px;
+                    display: block;
+                }}
+                .email-table-wrap {{
+                    overflow-x: auto;
+                    border: 1px solid #dbe4f0;
+                    border-radius: 14px;
+                    margin: 10px 0 20px 0;
+                    box-shadow: 0 5px 16px rgba(15,23,42,.05);
                 }}
                 table.email-table {{
                     border-collapse: collapse;
                     width: 100%;
                     font-size: 12px;
-                    margin-top: 8px;
+                    background: #ffffff;
                 }}
                 table.email-table th {{
-                    background: #2563eb;
+                    background: linear-gradient(135deg,#1d4ed8 0%,#4f46e5 100%);
                     color: white;
-                    padding: 8px;
+                    padding: 9px;
                     text-align: left;
+                    font-weight: 900;
+                    white-space: nowrap;
                 }}
                 table.email-table td {{
                     border-bottom: 1px solid #e5e7eb;
-                    padding: 7px;
+                    padding: 8px 9px;
+                    white-space: nowrap;
                 }}
                 table.email-table tr:nth-child(even) {{
                     background: #f8fafc;
+                }}
+                .email-empty {{
+                    color: #64748b;
+                    font-weight: 700;
+                    background: #f8fafc;
+                    border: 1px solid #e5e7eb;
+                    border-radius: 12px;
+                    padding: 12px;
+                }}
+                @media only screen and (max-width: 760px) {{
+                    .email-grid, .email-chart-row {{
+                        display: block;
+                    }}
+                    .email-kpi, .email-chart-card {{
+                        margin-bottom: 12px;
+                    }}
                 }}
             </style>
         </head>
@@ -27590,33 +27827,63 @@ with tab15:
                 <h1>Pratham Vihar — Complete Site Summary</h1>
                 <div class="muted">Generated on {generated_at}</div>
 
-                <div class="grid">
-                    {cards_html}
+                {email_section("📌 Booking Summary", "Bookings counted from booking date only, starting April 2025.")}
+                {email_kpi_grid(booking_cards_row_1, cols=4)}
+                {email_kpi_grid(booking_cards_row_2, cols=4)}
+                {email_kpi_grid(appreciation_cards, cols=3)}
+                {email_chart("Month-wise Bookings")}
+
+                {email_section("✅ Agreement & Stamp Duty Status", "Separate status totals and pending tables by month and sales executive.")}
+                {email_kpi_grid(agreement_cards, cols=3)}
+                <h3>🟠 Sales Executive-wise Month-wise Stamp Duty Pending / Not Received</h3>
+                <div class="email-table-wrap">{_df_to_email_table(stamp_pending_month_exec_df, max_rows=80)}</div>
+                <h3>🔵 Sales Executive-wise Month-wise Agreement Not Done Pending</h3>
+                <div class="email-table-wrap">{_df_to_email_table(agreement_pending_month_exec_df, max_rows=80)}</div>
+
+                {email_section("🏗️ Inventory, Wing-wise & Type-wise Sales", "Units sold, units left to sell, active holds, agreement lineup, and PSF.")}
+                <div class="email-table-wrap">{_df_to_email_table(inv_email_df, max_rows=20)}</div>
+                <div class="email-chart-row">
+                    {email_chart("Wing-wise Sold, Hold, Lineup & Left to Sell")}
+                    {email_chart("Wing-wise × Type-wise Avg PSF")}
+                </div>
+                <div class="email-chart-row">
+                    {email_chart("Wing-wise Avg PSF")}
+                    {email_chart("Type-wise Avg PSF")}
                 </div>
 
-                {chart_html}
+                {email_section("📣 Marketing Expenditure Summary", "Total spend, this month spend, recurring spend, agreement percentage, and cost per sqft.")}
+                {email_kpi_grid(marketing_cards_row_1, cols=4)}
+                {email_kpi_grid(marketing_cards_row_2, cols=2)}
+                <div class="email-chart-row">
+                    {email_chart("Month-wise Marketing Spend")}
+                    {email_chart("Top Purpose-wise Marketing Spend")}
+                </div>
 
-                <h2>Wing-wise Inventory Summary</h2>
-                {_df_to_email_table(inv_email_df, max_rows=20)}
+                {email_section("📆 Sales Executive Daily visits , call & Conversion summary", "Visits, revisits, calls, call answer rate, conversion ratios, executive-wise PSF, and conversion days.")}
+                {email_kpi_grid(daily_cards_row_1, cols=4)}
+                {email_kpi_grid(daily_cards_row_2, cols=3)}
+                <h3>💸 Sales Executive-wise Avg PSF Rate</h3>
+                {email_exec_metric_cards(exec_psf_df, "Avg PSF", lambda x: _fmt_psf(x), "Agreement cost / (carpet area × 1.38)", "ss-amber")}
+                <h3>⏱️ Sales Executive-wise Avg Conversion Days</h3>
+                {email_exec_metric_cards(exec_conversion_days_df, "Avg Conversion Days", lambda x: f"{_to_num(x):.1f} days" if _to_num(x) > 0 else "—", "Average booking conversion period", "ss-purple")}
+                {email_chart("Month-wise Visits, Revisits & Calls")}
+                <h3>👥 Sales Executive Call → Visit → Revisit → Booking Table</h3>
+                <div class="email-table-wrap">{_df_to_email_table(exec_email_df, max_rows=30)}</div>
+                {email_chart("Executive-wise Calls, Visits, Revisits & Bookings")}
 
-                <h2>Sales Executive-wise Calls, Visits, Revisits & Conversion</h2>
-                {_df_to_email_table(exec_email_df, max_rows=30)}
+                {email_section("💰 Collection, Received, Due & Current Construction Stage", "Current stage is read directly from the cashflow_slab_master table.")}
+                {email_kpi_grid(collection_cards, cols=4)}
+                {email_kpi_grid(stage_cards, cols=4)}
+                <div class="email-table-wrap">{_df_to_email_table(wing_email_df, max_rows=20)}</div>
 
-                <h2>Wing-wise Collection Summary</h2>
-                {_df_to_email_table(wing_email_df, max_rows=20)}
-
-                <h2>Sales Target & Achievement</h2>
-                {_df_to_email_table(target_achievement_df, max_rows=30)}
-
-                <h2>Stamp Duty Pending / Not Received</h2>
-                {_df_to_email_table(stamp_pending_month_exec_df, max_rows=80)}
-
-                <h2>Agreement Not Done Pending</h2>
-                {_df_to_email_table(agreement_pending_month_exec_df, max_rows=80)}
+                {email_section("🎯 Sales Target & Achievement", "This month target, achieved bookings, pending target, achievement percentage, and next month target.")}
+                {email_kpi_grid(target_cards, cols=4)}
+                <div class="email-table-wrap">{_df_to_email_table(target_achievement_df, max_rows=30)}</div>
             </div>
         </body>
         </html>
         """
+
 
     def _send_summary_email():
         email_cfg = {}
@@ -27642,11 +27909,14 @@ with tab15:
 
         chart_specs = [
             ("Month-wise Bookings", "monthly_bookings", monthly_bookings_df),
-            ("Wing-wise Inventory", "inventory", wing_inventory_df),
+            ("Wing-wise Sold, Hold, Lineup & Left to Sell", "inventory", wing_inventory_df),
+            ("Wing-wise × Type-wise Avg PSF", "wing_type_psf", wing_type_psf_df),
+            ("Wing-wise Avg PSF", "wing_psf", wing_psf_df),
+            ("Type-wise Avg PSF", "type_psf", type_psf_df),
             ("Month-wise Marketing Spend", "monthly_marketing", monthly_marketing_df),
-            ("Executive Performance", "exec_summary", exec_summary_df),
+            ("Top Purpose-wise Marketing Spend", "purpose_marketing", purpose_marketing_df),
             ("Month-wise Visits, Revisits & Calls", "visit_call", monthly_visit_call_df),
-            ("Sales Target vs Achievement", "target", target_achievement_df),
+            ("Executive-wise Calls, Visits, Revisits & Bookings", "exec_summary", exec_summary_df),
         ]
 
         image_cids = {}
@@ -27660,8 +27930,11 @@ with tab15:
 
         html_body = _build_email_html(image_cids)
 
+        sent_on = datetime.datetime.now()
+        sent_on_label = f"{sent_on.strftime('%B')} {sent_on.day}"
+
         msg = MIMEMultipart("related")
-        msg["Subject"] = f"{subject_prefix} — {datetime.datetime.now().strftime('%d %b %Y')}"
+        msg["Subject"] = f"{subject_prefix} — {sent_on_label}"
         msg["From"] = sender_email
         msg["To"] = ", ".join(recipients)
         msg["Date"] = formatdate(localtime=True)
@@ -27688,7 +27961,7 @@ with tab15:
     # ============================================================
     # EMAIL BUTTON
     # ============================================================
-    section_card("📧 Send Complete Summary on Email", "Sends KPI cards, graphs with values, colored tables, pending tables, target achievement, and cashflow stage summary.")
+    section_card("📧 Send Complete Summary on Email", "Sends the same screen-style section structure with colored KPI cards, graphs, tables, pending summaries, targets, and cashflow stage summary.")
 
     if st.button("📧 Send Complete Site Summary Email", type="primary", use_container_width=True):
         with st.spinner("Preparing and sending summary email..."):
