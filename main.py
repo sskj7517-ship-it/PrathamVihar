@@ -25437,6 +25437,29 @@ with tab15:
             return 0.0
         return (num / den) * 100.0
 
+    def _psf_from_agreement_carpet(agreement_cost, carpet_area):
+        """
+        PSF business rule:
+        Use agreement_cost and carpet_area only.
+        Formula: (agreement_cost / carpet_area) * 1.38
+        Do not use or average the rate column.
+        """
+        agreement = _to_num(agreement_cost)
+        carpet = _to_num(carpet_area)
+        if agreement <= 0 or carpet <= 0:
+            return 0.0
+        return (agreement / carpet) * 1.38
+
+    def _psf_from_df(df: pd.DataFrame):
+        if df is None or df.empty:
+            return 0.0
+        if "_AgreementCostNum" not in df.columns or "_CarpetNum" not in df.columns:
+            return 0.0
+        return _psf_from_agreement_carpet(
+            float(pd.to_numeric(df["_AgreementCostNum"], errors="coerce").fillna(0).sum()),
+            float(pd.to_numeric(df["_CarpetNum"], errors="coerce").fillna(0).sum()),
+        )
+
     def _is_agreement_done(v):
         s = _safe_str(v).lower()
         return s in {"done", "completed", "complete", "yes"} or "done" in s or "complete" in s
@@ -25909,10 +25932,9 @@ with tab15:
         bookings_work["_StampDutyAmountEst"] = bookings_work["_AgreementCostNum"] * bookings_work["_StampPctNum"] / 100.0
 
         bookings_work["_PSF"] = bookings_work.apply(
-            lambda r: (
-                r["_AgreementCostNum"] / (r["_CarpetNum"] * 1.38)
-                if r["_CarpetNum"] > 0 and r["_AgreementCostNum"] > 0
-                else 0.0
+            lambda r: _psf_from_agreement_carpet(
+                r.get("_AgreementCostNum", 0),
+                r.get("_CarpetNum", 0),
             ),
             axis=1,
         )
@@ -25945,7 +25967,7 @@ with tab15:
     total_stamp_duty_amount_est = float(bookings_work["_StampDutyAmountEst"].sum()) if not bookings_work.empty else 0.0
     total_received_booking = float(bookings_work["_ReceivedAmountNum"].sum()) if not bookings_work.empty else 0.0
     total_carpet_area = float(bookings_work["_CarpetNum"].sum()) if not bookings_work.empty else 0.0
-    avg_psf_overall = float(bookings_work.loc[bookings_work["_PSF"] > 0, "_PSF"].mean()) if not bookings_work.empty else 0.0
+    avg_psf_overall = _psf_from_agreement_carpet(total_agreement_value, total_carpet_area)
     avg_visits_for_booking = float(bookings_work.loc[bookings_work["_VisitCountNum"] > 0, "_VisitCountNum"].mean()) if not bookings_work.empty else 0.0
     avg_conversion_days = float(bookings_work.loc[bookings_work["_ConversionDaysNum"] > 0, "_ConversionDaysNum"].mean()) if not bookings_work.empty else 0.0
 
@@ -25969,8 +25991,8 @@ with tab15:
 
         d = df.copy()
         d = d[
-            d["_PSF"].notna()
-            & (d["_PSF"] > 0)
+            d["_AgreementCostNum"].gt(0)
+            & d["_CarpetNum"].gt(0)
             & d["_MonthSort"].ne("9999-99")
         ].copy()
 
@@ -25987,9 +26009,19 @@ with tab15:
             }
 
         monthly_avg = (
-            d.groupby(["_MonthSort", "_MonthLabel"], as_index=False)["_PSF"]
-            .mean()
+            d.groupby(["_MonthSort", "_MonthLabel"], as_index=False)
+            .agg(
+                _AgreementCostNum=("_AgreementCostNum", "sum"),
+                _CarpetNum=("_CarpetNum", "sum"),
+            )
             .sort_values("_MonthSort")
+        )
+        monthly_avg["_PSF"] = monthly_avg.apply(
+            lambda r: _psf_from_agreement_carpet(
+                r.get("_AgreementCostNum", 0),
+                r.get("_CarpetNum", 0),
+            ),
+            axis=1,
         )
 
         if monthly_avg.empty:
@@ -26136,31 +26168,58 @@ with tab15:
     our_available_units = max(total_our_inventory - our_sold_units - our_hold_units, 0)
 
     if not bookings_work.empty:
+        psf_source_df = bookings_work[
+            bookings_work["_AgreementCostNum"].gt(0) &
+            bookings_work["_CarpetNum"].gt(0)
+        ].copy()
+
         wing_psf_df = (
-            bookings_work[bookings_work["_PSF"] > 0]
-            .groupby("_WingNorm", as_index=False)["_PSF"]
-            .mean()
-            .rename(columns={"_WingNorm": "Wing", "_PSF": "Avg PSF"})
+            psf_source_df
+            .groupby("_WingNorm", as_index=False)
+            .agg(
+                _AgreementCostNum=("_AgreementCostNum", "sum"),
+                _CarpetNum=("_CarpetNum", "sum"),
+            )
+            .rename(columns={"_WingNorm": "Wing"})
             .sort_values("Wing")
         )
+        wing_psf_df["Avg PSF"] = wing_psf_df.apply(
+            lambda r: _psf_from_agreement_carpet(r["_AgreementCostNum"], r["_CarpetNum"]),
+            axis=1,
+        )
+        wing_psf_df = wing_psf_df[["Wing", "Avg PSF"]]
 
         type_psf_df = (
-            bookings_work[bookings_work["_PSF"] > 0]
-            .groupby("_TypeForAppreciation", as_index=False)["_PSF"]
-            .mean()
-            .rename(columns={"_TypeForAppreciation": "Type", "_PSF": "Avg PSF"})
+            psf_source_df
+            .groupby("_TypeForAppreciation", as_index=False)
+            .agg(
+                _AgreementCostNum=("_AgreementCostNum", "sum"),
+                _CarpetNum=("_CarpetNum", "sum"),
+            )
+            .rename(columns={"_TypeForAppreciation": "Type"})
             .sort_values("Type")
         )
-        type_psf_df = type_psf_df[type_psf_df["Type"].ne("")].copy()
+        type_psf_df["Avg PSF"] = type_psf_df.apply(
+            lambda r: _psf_from_agreement_carpet(r["_AgreementCostNum"], r["_CarpetNum"]),
+            axis=1,
+        )
+        type_psf_df = type_psf_df[type_psf_df["Type"].ne("")][["Type", "Avg PSF"]].copy()
 
         wing_type_psf_df = (
-            bookings_work[bookings_work["_PSF"] > 0]
-            .groupby(["_WingNorm", "_TypeForAppreciation"], as_index=False)["_PSF"]
-            .mean()
-            .rename(columns={"_WingNorm": "Wing", "_TypeForAppreciation": "Type", "_PSF": "Avg PSF"})
+            psf_source_df
+            .groupby(["_WingNorm", "_TypeForAppreciation"], as_index=False)
+            .agg(
+                _AgreementCostNum=("_AgreementCostNum", "sum"),
+                _CarpetNum=("_CarpetNum", "sum"),
+            )
+            .rename(columns={"_WingNorm": "Wing", "_TypeForAppreciation": "Type"})
             .sort_values(["Wing", "Type"])
         )
-        wing_type_psf_df = wing_type_psf_df[wing_type_psf_df["Type"].ne("")].copy()
+        wing_type_psf_df["Avg PSF"] = wing_type_psf_df.apply(
+            lambda r: _psf_from_agreement_carpet(r["_AgreementCostNum"], r["_CarpetNum"]),
+            axis=1,
+        )
+        wing_type_psf_df = wing_type_psf_df[wing_type_psf_df["Type"].ne("")][["Wing", "Type", "Avg PSF"]].copy()
     else:
         wing_psf_df = pd.DataFrame(columns=["Wing", "Avg PSF"])
         type_psf_df = pd.DataFrame(columns=["Type", "Avg PSF"])
@@ -26411,11 +26470,22 @@ with tab15:
         exec_psf_df = (
             bookings_work[
                 bookings_work["_SalesExecutive"].astype(str).str.strip().ne("") &
-                bookings_work["_PSF"].gt(0)
+                bookings_work["_AgreementCostNum"].gt(0) &
+                bookings_work["_CarpetNum"].gt(0)
             ]
-            .groupby("_SalesExecutive", as_index=False)["_PSF"]
-            .mean()
-            .rename(columns={"_SalesExecutive": "Sales Executive", "_PSF": "Avg PSF"})
+            .groupby("_SalesExecutive", as_index=False)
+            .agg(
+                _AgreementCostNum=("_AgreementCostNum", "sum"),
+                _CarpetNum=("_CarpetNum", "sum"),
+            )
+            .rename(columns={"_SalesExecutive": "Sales Executive"})
+        )
+        exec_psf_df["Avg PSF"] = exec_psf_df.apply(
+            lambda r: _psf_from_agreement_carpet(r["_AgreementCostNum"], r["_CarpetNum"]),
+            axis=1,
+        )
+        exec_psf_df = (
+            exec_psf_df[["Sales Executive", "Avg PSF"]]
             .sort_values("Avg PSF", ascending=False)
             .reset_index(drop=True)
         )
@@ -26954,7 +27024,7 @@ with tab15:
     with b3:
         kpi_card("Total Agreement Cost Sold", _fmt_money(total_agreement_value), "Agreement cost sold", "ss-blue")
     with b4:
-        kpi_card("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Rate or Agreement / Saleable", "ss-amber")
+        kpi_card("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Agreement cost / carpet area × 1.38", "ss-amber")
 
     b5, b6, b7, b8 = st.columns(4)
     with b5:
@@ -27187,7 +27257,7 @@ with tab15:
         exec_psf_df,
         "Avg PSF",
         lambda x: _fmt_psf(x),
-        "Agreement cost / (carpet area × 1.38)",
+        "Agreement cost / carpet area × 1.38",
         "ss-amber",
     )
 
@@ -27573,7 +27643,7 @@ with tab15:
             ("Total Bookings", f"{total_bookings:,}", f"Distinct sold units: {sold_units_distinct:,}", "ss-blue"),
             ("Total Carpet Area Sold", f"{total_carpet_area:,.0f} sqft", "Carpet area", "ss-green"),
             ("Total Agreement Cost Sold", _fmt_money(total_agreement_value), "Agreement cost sold", "ss-blue"),
-            ("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Agreement / saleable area", "ss-amber"),
+            ("Overall Avg PSF", _fmt_psf(avg_psf_overall), "Agreement cost / carpet area × 1.38", "ss-amber"),
         ]
         booking_cards_row_2 = [
             ("Overall Avg Conversion Period", f"{avg_conversion_days:.1f} days", "First visit to booking", "ss-purple"),
@@ -27863,7 +27933,7 @@ with tab15:
                 {email_kpi_grid(daily_cards_row_1, cols=4)}
                 {email_kpi_grid(daily_cards_row_2, cols=3)}
                 <h3>💸 Sales Executive-wise Avg PSF Rate</h3>
-                {email_exec_metric_cards(exec_psf_df, "Avg PSF", lambda x: _fmt_psf(x), "Agreement cost / (carpet area × 1.38)", "ss-amber")}
+                {email_exec_metric_cards(exec_psf_df, "Avg PSF", lambda x: _fmt_psf(x), "Agreement cost / carpet area × 1.38", "ss-amber")}
                 <h3>⏱️ Sales Executive-wise Avg Conversion Days</h3>
                 {email_exec_metric_cards(exec_conversion_days_df, "Avg Conversion Days", lambda x: f"{_to_num(x):.1f} days" if _to_num(x) > 0 else "—", "Average booking conversion period", "ss-purple")}
                 {email_chart("Month-wise Visits, Revisits & Calls")}
