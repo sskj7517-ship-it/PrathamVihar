@@ -8,6 +8,7 @@ TABLES = {
     "cp_payout_df": "cp_payout_tracker",
     "daily_visits_df": "daily_visits",
     "cashflow_slab_master_df": "cashflow_slab_master",
+    "sales_targets_df": "sales_targets",
 }
 
 
@@ -35,14 +36,22 @@ def fetch_table(supabase, table_name: str, order_col: str = "id") -> pd.DataFram
 
         start += page_size
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+
+    if not df.empty:
+        df.columns = [str(c).strip() for c in df.columns]
+
+    return df
 
 
 def load_all_data(supabase) -> dict:
     data = {}
 
     for key, table_name in TABLES.items():
-        data[key] = fetch_table(supabase, table_name)
+        try:
+            data[key] = fetch_table(supabase, table_name)
+        except Exception:
+            data[key] = pd.DataFrame()
 
     return data
 
