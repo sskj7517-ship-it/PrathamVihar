@@ -16,121 +16,23 @@ from supabase_connector import load_all_data, insert_row, update_row, delete_row
 
 
 # ============================================================
-# SUPABASE CONFIG
+# PAGE CONFIG
+# ============================================================
+st.set_page_config(
+    page_title="Pratham Vihar CRM",
+    layout="wide",
+)
+
+
+# ============================================================
+# SUPABASE CONFIG — NO APP LOGIN
+# Access is controlled by Streamlit sharing.
+# Supabase access is server-side using service role key.
 # ============================================================
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
+SUPABASE_SERVICE_ROLE_KEY = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
 
-supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-
-
-# ============================================================
-# PASSWORD LOGIN
-# ============================================================
-def do_logout():
-    try:
-        supabase.auth.sign_out()
-    except Exception:
-        pass
-
-    for k in [
-        "pv_logged_in",
-        "pv_user_email",
-        "pv_access_token",
-        "pv_refresh_token",
-    ]:
-        st.session_state.pop(k, None)
-
-    st.rerun()
-
-
-def restore_supabase_session():
-    access_token = st.session_state.get("pv_access_token")
-    refresh_token = st.session_state.get("pv_refresh_token")
-
-    if access_token and refresh_token:
-        try:
-            supabase.auth.set_session(access_token, refresh_token)
-            return True
-        except Exception:
-            return False
-
-    return False
-
-
-def login_screen():
-    st.set_page_config(page_title="Pratham Vihar CRM", layout="wide")
-
-    st.markdown(
-        """
-        <div style="
-            max-width:520px;
-            margin:70px auto 20px auto;
-            padding:28px;
-            border:1px solid #e2e8f0;
-            border-radius:18px;
-            box-shadow:0 10px 28px rgba(15,23,42,.08);
-            background:white;
-            text-align:center;
-        ">
-            <h1 style="margin-bottom:6px;">🏢 Pratham Vihar CRM</h1>
-            <p style="color:#64748b;margin-top:0;">Login with your registered email and password</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    with st.form("pv_password_login_form"):
-        email = st.text_input("Email", placeholder="your@email.com")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login", use_container_width=True)
-
-    if submitted:
-        email = str(email or "").strip().lower()
-
-        if not email or not password:
-            st.error("Please enter email and password.")
-            st.stop()
-
-        try:
-            res = supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": password,
-            })
-
-            if not res or not res.session:
-                st.error("Login failed. Please check your email/password.")
-                st.stop()
-
-            st.session_state["pv_logged_in"] = True
-            st.session_state["pv_user_email"] = email
-            st.session_state["pv_access_token"] = res.session.access_token
-            st.session_state["pv_refresh_token"] = res.session.refresh_token
-
-            st.success("Login successful.")
-            st.rerun()
-
-        except Exception as e:
-            st.error(f"Login failed: {e}")
-            st.stop()
-
-    st.stop()
-
-
-# Restore session on every rerun
-if not st.session_state.get("pv_logged_in"):
-    login_screen()
-else:
-    ok = restore_supabase_session()
-    if not ok:
-        do_logout()
-
-
-# Sidebar logout
-with st.sidebar:
-    st.caption(f"Logged in as: {st.session_state.get('pv_user_email', '')}")
-    if st.button("Logout", use_container_width=True):
-        do_logout()
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 
 # ============================================================
@@ -141,17 +43,20 @@ sheets_connected = True
 try:
     data = load_all_data(supabase)
 
-    sheet_df = data["sheet_df"]
-    marketing_df = data["marketing_df"]
-    hold_df = data["hold_df"]
-    cp_payout_df = data["cp_payout_df"]
-    daily_visits_df = data["daily_visits_df"]
-    cashflow_slab_master_df = data["cashflow_slab_master_df"]
+    sheet_df = data.get("sheet_df", pd.DataFrame())
+    marketing_df = data.get("marketing_df", pd.DataFrame())
+    hold_df = data.get("hold_df", pd.DataFrame())
+    cp_payout_df = data.get("cp_payout_df", pd.DataFrame())
+    daily_visits_df = data.get("daily_visits_df", pd.DataFrame())
+    cashflow_slab_master_df = data.get("cashflow_slab_master_df", pd.DataFrame())
+    sales_targets_df = data.get("sales_targets_df", pd.DataFrame())
 
     sheets_connected = True
     supabase_connected = True
 
+    # Keep all names because different tabs may use different dataframe names
     booking_df = sheet_df.copy()
+    bookings_df = sheet_df.copy()
 
 except Exception as e:
     st.error(f"❌ Error connecting to Supabase: {str(e)}")
@@ -162,7 +67,10 @@ except Exception as e:
     cp_payout_df = pd.DataFrame()
     daily_visits_df = pd.DataFrame()
     cashflow_slab_master_df = pd.DataFrame()
+    sales_targets_df = pd.DataFrame()
+
     booking_df = pd.DataFrame()
+    bookings_df = pd.DataFrame()
 
     sheets_connected = False
     supabase_connected = False
