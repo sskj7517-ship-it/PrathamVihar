@@ -10845,6 +10845,13 @@ with tab1:
                 "answered": "Sailee D Calls Answered",
                 "unanswered": "Sailee D Calls Unanswered",
             },
+            {
+                "name": "Dhanashree W",
+                "revisits": "Dhanashree W Revisits",
+                "attended": "Dhanashree W Attended",
+                "answered": "Dhanashree W Calls Answered",
+                "unanswered": "Dhanashree W Calls Unanswered",
+            },
         ]
     
         DAILY_VISITS_RENAME_MAP = {
@@ -10863,21 +10870,25 @@ with tab1:
             "komal_k_revisits": "Komal K Revisits",
             "ashutosh_s_revisits": "Ashutosh S Revisits",
             "sailee_d_revisits": "Sailee D Revisits",
+            "dhanashree_w_revisits": "Dhanashree W Revisits",
             "total_attended": "Total Attended",
             "tejas_p_attended": "Tejas P Attended",
             "komal_k_attended": "Komal K Attended",
             "ashutosh_s_attended": "Ashutosh S Attended",
             "sailee_d_attended": "Sailee D Attended",
+            "dhanashree_w_attended": "Dhanashree W Attended",
             "total_calls_answered": "Total Calls Answered",
             "tejas_p_calls_answered": "Tejas P Calls Answered",
             "komal_k_calls_answered": "Komal K Calls Answered",
             "ashutosh_s_calls_answered": "Ashutosh S Calls Answered",
             "sailee_d_calls_answered": "Sailee D Calls Answered",
+            "dhanashree_w_calls_answered": "Dhanashree W Calls Answered",
             "total_calls_unanswered": "Total Calls Unanswered",
             "tejas_p_calls_unanswered": "Tejas P Calls Unanswered",
             "komal_k_calls_unanswered": "Komal K Calls Unanswered",
             "ashutosh_s_calls_unanswered": "Ashutosh S Calls Unanswered",
             "sailee_d_calls_unanswered": "Sailee D Calls Unanswered",
+            "dhanashree_w_calls_unanswered": "Dhanashree W Calls Unanswered",
             "festival_1": "Festival 1",
             "festival_2": "Festival 2",
             "festival_3": "Festival 3",
@@ -12426,7 +12437,7 @@ with tab2:
                 key=_fiscal_q_sort
             )
 
-            default_exec_names = ["Harshal S", "Tejas P", "Sagar B", "Alok R", "Ashutosh S", "Komal K"]
+            default_exec_names = ["Harshal S", "Tejas P", "Sagar B", "Alok R", "Ashutosh S", "Komal K", "Sailee D", "Dhanashree W"]
 
             exec_from_data = sorted([
                 x for x in calc_df["Sales Executive"].dropna().astype(str).str.strip().unique().tolist()
@@ -14724,7 +14735,7 @@ with tab3:
             with le2:
                 st.selectbox(
                     "Sales Executive *",
-                    ["Komal K", "Tejas P", "Ashutosh S", "Sailee D"],
+                    ["Komal K", "Tejas P", "Ashutosh S", "Sailee D", "Dhanashree W"],
                     key="sales_exec",
                     disabled=st.session_state.inputs_locked
                 )
@@ -19443,11 +19454,13 @@ PV_SHEET_SCHEMA = {
             "Komal K Revisits": "Revisits handled by Komal K",
             "Ashutosh S Revisits": "Revisits handled by Ashutosh S",
             "Sailee D Revisits": "Revisits handled by Sailee D",
+            "Dhanashree W Revisits": "Revisits handled by Dhanashree W",
             "Total Attended": "Total visits attended by all executives",
             "Tejas P Attended": "Total visits attended by Tejas P",
             "Komal K Attended": "Total visits attended by Komal K",
             "Ashutosh S Attended": "Total visits attended by Ashutosh S",
             "Sailee D Attended": "Total visits attended by Sailee D",
+            "Dhanashree W Attended": "Total visits attended by Dhanashree W",
             "Total Calls Answered": "Total answered calls",
             "Total Calls Unanswered": "Total unanswered calls",
             "Festival 1": "First festival or offer campaign remark",
@@ -19536,21 +19549,25 @@ PV_COLUMN_ALIASES = {
     "Komal K Revisits": ["komal_k_revisits"],
     "Ashutosh S Revisits": ["ashutosh_s_revisits"],
     "Sailee D Revisits": ["sailee_d_revisits"],
+    "Dhanashree W Revisits": ["dhanashree_w_revisits"],
     "Total Attended": ["total_attended"],
     "Tejas P Attended": ["tejas_p_attended"],
     "Komal K Attended": ["komal_k_attended"],
     "Ashutosh S Attended": ["ashutosh_s_attended"],
     "Sailee D Attended": ["sailee_d_attended"],
+    "Dhanashree W Attended": ["dhanashree_w_attended"],
     "Total Calls Answered": ["total_calls_answered"],
     "Tejas P Calls Answered": ["tejas_p_calls_answered"],
     "Komal K Calls Answered": ["komal_k_calls_answered"],
     "Ashutosh S Calls Answered": ["ashutosh_s_calls_answered"],
     "Sailee D Calls Answered": ["sailee_d_calls_answered"],
+    "Dhanashree W Calls Answered": ["dhanashree_w_calls_answered"],
     "Total Calls Unanswered": ["total_calls_unanswered"],
     "Tejas P Calls Unanswered": ["tejas_p_calls_unanswered"],
     "Komal K Calls Unanswered": ["komal_k_calls_unanswered"],
     "Ashutosh S Calls Unanswered": ["ashutosh_s_calls_unanswered"],
     "Sailee D Calls Unanswered": ["sailee_d_calls_unanswered"],
+    "Dhanashree W Calls Unanswered": ["dhanashree_w_calls_unanswered"],
     "Festival 1": ["festival_1"],
     "Festival 2": ["festival_2"],
     "Festival 3": ["festival_3"],
@@ -20222,6 +20239,7 @@ def _answer_daily_visits_question(question: str, df: pd.DataFrame):
             ("Komal K Revisits", "Komal K Attended", "Komal K Calls Answered", "Komal K Calls Unanswered", "Komal K"),
             ("Ashutosh S Revisits", "Ashutosh S Attended", "Ashutosh S Calls Answered", "Ashutosh S Calls Unanswered", "Ashutosh S"),
             ("Sailee D Revisits", "Sailee D Attended", "Sailee D Calls Answered", "Sailee D Calls Unanswered", "Sailee D"),
+            ("Dhanashree W Revisits", "Dhanashree W Attended", "Dhanashree W Calls Answered", "Dhanashree W Calls Unanswered", "Dhanashree W"),
         ]
 
         rows = []
@@ -21010,6 +21028,7 @@ with tab11:
         ("Komal K", "komal_k"),
         ("Ashutosh S", "ashutosh_s"),
         ("Sailee D", "sailee_d"),
+        ("Dhanashree W", "dhanashree_w"),
     ]
 
     st.caption(
@@ -21304,7 +21323,7 @@ LINEUP_REMARKS_DB = "agreement_lineup_remarks"
 HOLD_ENTRY_TYPE_HOLD = "HOLD"
 HOLD_ENTRY_TYPE_LINEUP = "AGREEMENT_LINEUP"
 
-HOLD_BY_OPTIONS = ["Tejas P", "Ashutosh S", "Komal K", "Sailee D"]
+HOLD_BY_OPTIONS = ["Tejas P", "Ashutosh S", "Komal K", "Sailee D", "Dhanashree W"]
 
 # ------------------------------------------------------------
 # CONFIG
@@ -24739,6 +24758,7 @@ with tab14:
         {"name": "Alok R", "col": "alok_r"},
         {"name": "Sagar B", "col": "sagar_b"},
         {"name": "Advait M", "col": "advait_m"},
+        {"name": "Dhanashree W", "col": "dhanashree_w"},
     ]
 
     # ============================================================
@@ -26287,6 +26307,7 @@ with tab15:
     KNOWN_EXECUTIVES = [
         "Alok R", "Tejas P", "Ashutosh S", "Sagar B",
         "Harshal S", "Komal K", "Sailee D", "Advait M",
+        "Dhanashree W",
     ]
 
     if not bookings_work.empty:
@@ -26695,6 +26716,7 @@ with tab15:
             "komalk": "Komal K",
             "saileed": "Sailee D",
             "advaitm": "Advait M",
+            "dhanashreew": "Dhanashree W"
         }
 
         n = _norm_col(raw)
