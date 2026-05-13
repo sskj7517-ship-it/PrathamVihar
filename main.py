@@ -20874,39 +20874,6 @@ with tab11:
             margin-top: 8px;
             margin-bottom: 8px;
         }
-        .dv-chip-wrap{
-            display:flex;
-            gap:8px;
-            flex-wrap:wrap;
-            margin:8px 0 14px 0;
-        }
-        .dv-chip{
-            display:inline-flex;
-            align-items:center;
-            gap:7px;
-            border-radius:999px;
-            padding:6px 10px;
-            background:#f8fafc;
-            border:1px solid #e2e8f0;
-            font-size:12.5px;
-            font-weight:800;
-            color:#0f172a;
-        }
-        .dv-chip.ok{
-            background:#ecfdf5;
-            border-color:#bbf7d0;
-            color:#166534;
-        }
-        .dv-dot{
-            width:8px;
-            height:8px;
-            border-radius:999px;
-            background:#2563eb;
-            display:inline-block;
-        }
-        .dv-chip.ok .dv-dot{
-            background:#10b981;
-        }
         </style>
         """,
         unsafe_allow_html=True
@@ -20928,11 +20895,6 @@ with tab11:
         return d.strftime("%B %y").upper()
 
     def _fetch_existing_daily_visit(target_date: datetime.date):
-        """
-        Finds existing row(s) for the selected visit_date.
-        Since the table currently has no UNIQUE constraint on visit_date,
-        this selects all matches and updates the latest id if duplicates exist.
-        """
         try:
             res = (
                 supabase
@@ -21023,6 +20985,13 @@ with tab11:
 
         return str(choice).strip()
 
+    # ============================================================
+    # Sales executives
+    # Add future executives here only.
+    # Make sure matching columns exist in Supabase:
+    # {exec_key}_revisits, {exec_key}_attended,
+    # {exec_key}_calls_answered, {exec_key}_calls_unanswered
+    # ============================================================
     SALES_EXECUTIVES = [
         ("Tejas P", "tejas_p"),
         ("Komal K", "komal_k"),
@@ -21030,6 +20999,8 @@ with tab11:
         ("Sailee D", "sailee_d"),
         ("Dhanashree W", "dhanashree_w"),
     ]
+
+    EXECUTIVES_PER_ROW = 4
 
     st.caption(
         "Enter source-wise visits and executive-wise performance. Month, day, totals, and updates are handled automatically."
@@ -21065,44 +21036,49 @@ with tab11:
         calls_answered = {}
         calls_unanswered = {}
 
-        exec_cols = st.columns(4)
+        # ✅ FIXED:
+        # This creates executives in rows of 4.
+        # So 5th executive automatically moves to next row.
+        for start in range(0, len(SALES_EXECUTIVES), EXECUTIVES_PER_ROW):
+            chunk = SALES_EXECUTIVES[start:start + EXECUTIVES_PER_ROW]
+            exec_cols = st.columns(len(chunk))
 
-        for i, (exec_name, exec_key) in enumerate(SALES_EXECUTIVES):
-            with exec_cols[i]:
-                with st.container(border=True):
-                    st.markdown(f"**{exec_name}**")
+            for idx, (exec_name, exec_key) in enumerate(chunk):
+                with exec_cols[idx]:
+                    with st.container(border=True):
+                        st.markdown(f"**{exec_name}**")
 
-                    revisits[exec_key] = st.number_input(
-                        f"{exec_name} Revisits",
-                        min_value=0,
-                        step=1,
-                        value=0,
-                        key=f"{exec_key}_revisits"
-                    )
+                        revisits[exec_key] = st.number_input(
+                            f"{exec_name} Revisits",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"{exec_key}_revisits"
+                        )
 
-                    attended[exec_key] = st.number_input(
-                        f"{exec_name} Attended",
-                        min_value=0,
-                        step=1,
-                        value=0,
-                        key=f"{exec_key}_attended"
-                    )
+                        attended[exec_key] = st.number_input(
+                            f"{exec_name} Attended",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"{exec_key}_attended"
+                        )
 
-                    calls_answered[exec_key] = st.number_input(
-                        f"{exec_name} Calls Answered",
-                        min_value=0,
-                        step=1,
-                        value=0,
-                        key=f"{exec_key}_calls_answered"
-                    )
+                        calls_answered[exec_key] = st.number_input(
+                            f"{exec_name} Calls Answered",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"{exec_key}_calls_answered"
+                        )
 
-                    calls_unanswered[exec_key] = st.number_input(
-                        f"{exec_name} Calls Unanswered",
-                        min_value=0,
-                        step=1,
-                        value=0,
-                        key=f"{exec_key}_calls_unanswered"
-                    )
+                        calls_unanswered[exec_key] = st.number_input(
+                            f"{exec_name} Calls Unanswered",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"{exec_key}_calls_unanswered"
+                        )
 
         revisit_total = int(sum(revisits.values()))
         attended_total = int(sum(attended.values()))
@@ -21142,7 +21118,7 @@ with tab11:
         b1.success(f"📌 Total Visits = {total_visits}")
         b2.info(f"🗓️ Day = {d.strftime('%A')}")
 
-        submit = st.form_submit_button("✅ Submit Entry", type="primary")
+        submit = st.form_submit_button("✅ Submit Entry", type="primary", use_container_width=True)
 
     # ============================================================
     # Submit handler
@@ -21164,32 +21140,9 @@ with tab11:
                 "todays_booking": int(_to_int(booking)),
 
                 "total_revisits": int(_to_int(revisit_total)),
-                "tejas_p_revisits": int(_to_int(revisits["tejas_p"])),
-                "komal_k_revisits": int(_to_int(revisits["komal_k"])),
-                "ashutosh_s_revisits": int(_to_int(revisits["ashutosh_s"])),
-                "sailee_d_revisits": int(_to_int(revisits["sailee_d"])),
-                "dhanashree_w_revisits": int(_to_int(revisits["dhanashree_w"])),
-
                 "total_attended": int(_to_int(attended_total)),
-                "tejas_p_attended": int(_to_int(attended["tejas_p"])),
-                "komal_k_attended": int(_to_int(attended["komal_k"])),
-                "ashutosh_s_attended": int(_to_int(attended["ashutosh_s"])),
-                "sailee_d_attended": int(_to_int(attended["sailee_d"])),
-                "dhanashree_w_attended": int(_to_int(attended["dhanashree_w"])),
-
                 "total_calls_answered": int(_to_int(calls_answered_total)),
-                "tejas_p_calls_answered": int(_to_int(calls_answered["tejas_p"])),
-                "komal_k_calls_answered": int(_to_int(calls_answered["komal_k"])),
-                "ashutosh_s_calls_answered": int(_to_int(calls_answered["ashutosh_s"])),
-                "sailee_d_calls_answered": int(_to_int(calls_answered["sailee_d"])),
-                "dhanashree_w_calls_answered": int(_to_int(calls_answered["dhanashree_w"])),
-
                 "total_calls_unanswered": int(_to_int(calls_unanswered_total)),
-                "tejas_p_calls_unanswered": int(_to_int(calls_unanswered["tejas_p"])),
-                "komal_k_calls_unanswered": int(_to_int(calls_unanswered["komal_k"])),
-                "ashutosh_s_calls_unanswered": int(_to_int(calls_unanswered["ashutosh_s"])),
-                "sailee_d_calls_unanswered": int(_to_int(calls_unanswered["sailee_d"])),
-                "dhanashree_w_calls_unanswered": int(_to_int(calls_unanswered["dhanashree_w"])),
 
                 "festival_1": festival_1 or None,
                 "festival_2": festival_2 or None,
@@ -21197,6 +21150,14 @@ with tab11:
 
                 "total_visits": int(total_visits),
             }
+
+            # Dynamic executive payload
+            # This avoids hard-coding every executive repeatedly.
+            for exec_name, exec_key in SALES_EXECUTIVES:
+                payload[f"{exec_key}_revisits"] = int(_to_int(revisits.get(exec_key, 0)))
+                payload[f"{exec_key}_attended"] = int(_to_int(attended.get(exec_key, 0)))
+                payload[f"{exec_key}_calls_answered"] = int(_to_int(calls_answered.get(exec_key, 0)))
+                payload[f"{exec_key}_calls_unanswered"] = int(_to_int(calls_unanswered.get(exec_key, 0)))
 
             existing_rows = _fetch_existing_daily_visit(d)
 
@@ -21220,7 +21181,6 @@ with tab11:
                 _insert_daily_visit(payload)
                 st.success("✅ Saved successfully.")
 
-            # Clear Streamlit caches if your other tabs use cached Daily Visits data
             try:
                 st.cache_data.clear()
             except Exception:
@@ -21258,6 +21218,15 @@ with tab11:
             "total_visits",
         ]
 
+        # Add executive columns dynamically to recent preview if present
+        for exec_name, exec_key in SALES_EXECUTIVES:
+            preferred_cols.extend([
+                f"{exec_key}_revisits",
+                f"{exec_key}_attended",
+                f"{exec_key}_calls_answered",
+                f"{exec_key}_calls_unanswered",
+            ])
+
         show_cols = [c for c in preferred_cols if c in recent_df.columns]
         display_df = recent_df[show_cols].copy()
 
@@ -21279,9 +21248,15 @@ with tab11:
             "total_visits": "Total Visits",
         }
 
-        display_df = display_df.rename(columns=rename_map)
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        for exec_name, exec_key in SALES_EXECUTIVES:
+            rename_map[f"{exec_key}_revisits"] = f"{exec_name} Revisits"
+            rename_map[f"{exec_key}_attended"] = f"{exec_name} Attended"
+            rename_map[f"{exec_key}_calls_answered"] = f"{exec_name} Calls Answered"
+            rename_map[f"{exec_key}_calls_unanswered"] = f"{exec_name} Calls Unanswered"
 
+        display_df = display_df.rename(columns=rename_map)
+
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 # ============================================================
 # TAB 15 — INVENTORY STATUS
 # Supabase table used: public.holds
