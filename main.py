@@ -21168,24 +21168,28 @@ with tab11:
                 "komal_k_revisits": int(_to_int(revisits["komal_k"])),
                 "ashutosh_s_revisits": int(_to_int(revisits["ashutosh_s"])),
                 "sailee_d_revisits": int(_to_int(revisits["sailee_d"])),
+                "dhanashree_w_revisits": int(_to_int(revisits["dhanashree_w"])),
 
                 "total_attended": int(_to_int(attended_total)),
                 "tejas_p_attended": int(_to_int(attended["tejas_p"])),
                 "komal_k_attended": int(_to_int(attended["komal_k"])),
                 "ashutosh_s_attended": int(_to_int(attended["ashutosh_s"])),
                 "sailee_d_attended": int(_to_int(attended["sailee_d"])),
+                "dhanashree_w_attended": int(_to_int(attended["dhanashree_w"])),
 
                 "total_calls_answered": int(_to_int(calls_answered_total)),
                 "tejas_p_calls_answered": int(_to_int(calls_answered["tejas_p"])),
                 "komal_k_calls_answered": int(_to_int(calls_answered["komal_k"])),
                 "ashutosh_s_calls_answered": int(_to_int(calls_answered["ashutosh_s"])),
                 "sailee_d_calls_answered": int(_to_int(calls_answered["sailee_d"])),
+                "dhanashree_w_calls_answered": int(_to_int(calls_answered["dhanashree_w"])),
 
                 "total_calls_unanswered": int(_to_int(calls_unanswered_total)),
                 "tejas_p_calls_unanswered": int(_to_int(calls_unanswered["tejas_p"])),
                 "komal_k_calls_unanswered": int(_to_int(calls_unanswered["komal_k"])),
                 "ashutosh_s_calls_unanswered": int(_to_int(calls_unanswered["ashutosh_s"])),
                 "sailee_d_calls_unanswered": int(_to_int(calls_unanswered["sailee_d"])),
+                "dhanashree_w_calls_unanswered": int(_to_int(calls_unanswered["dhanashree_w"])),
 
                 "festival_1": festival_1 or None,
                 "festival_2": festival_2 or None,
