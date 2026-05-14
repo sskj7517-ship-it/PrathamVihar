@@ -15325,598 +15325,850 @@ with tab4:
                 st.markdown('</div>', unsafe_allow_html=True)
 
     # =========================================================
-    # SUBTAB 2: REFERRAL INVOICE / VOUCHER - SUPABASE VERSION
+    # SUBTAB 2: REFERRAL INVOICE / VOUCHER - FLEXIBLE SUPABASE VERSION
+    # Works with both:
+    #   Supabase columns: customer_name, flat_number, booking_date, etc.
+    #   Old sheet columns: Customer Name, Flat Number, Date, etc.
     # =========================================================
     with referral_invoice_tab:
+        import re
+        import io
+        import base64
+        import datetime
+        import pandas as pd
+        import streamlit as st
+        from fpdf import FPDF
+    
         st.header("🧾 Referral Incentive Voucher")
-
-        if not supabase_connected:
+    
+        # ---------------------------------------------------------
+        # Basic CSS for cards/download button
+        # ---------------------------------------------------------
+        st.markdown(
+            """
+            <style>
+            .rg-wrap{
+                display:grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap:14px;
+                margin: 14px 0 18px 0;
+            }
+            .rg-card{
+                background:#ffffff;
+                border:1px solid #e5e7eb;
+                border-radius:16px;
+                padding:16px;
+                box-shadow:0 8px 20px rgba(15,23,42,.06);
+            }
+            .rg-card.ok{background:#ecfdf5;border-color:#bbf7d0;}
+            .rg-card.info{background:#eff6ff;border-color:#bfdbfe;}
+            .rg-label{
+                font-size:12px;
+                font-weight:800;
+                color:#64748b;
+                text-transform:uppercase;
+                letter-spacing:.04em;
+                margin-bottom:7px;
+            }
+            .rg-value{
+                font-size:20px;
+                font-weight:900;
+                color:#0f172a;
+                line-height:1.25;
+            }
+            .rg-kicker{
+                display:block;
+                font-size:12px;
+                font-weight:700;
+                color:#64748b;
+                margin-top:6px;
+            }
+            .rg-download{
+                display:inline-block;
+                background:linear-gradient(135deg,#2563eb,#7c3aed);
+                color:white !important;
+                padding:13px 18px;
+                border-radius:14px;
+                font-weight:900;
+                text-decoration:none !important;
+                box-shadow:0 10px 24px rgba(37,99,235,.22);
+                margin-top:10px;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+    
+        # ---------------------------------------------------------
+        # Connection guard
+        # ---------------------------------------------------------
+        if not globals().get("supabase_connected", False):
             st.warning("📋 Please connect to Supabase to use this feature.")
+            st.stop()
+    
+        # ---------------------------------------------------------
+        # Pick booking dataframe safely
+        # ---------------------------------------------------------
+        df_ref_base = pd.DataFrame()
+    
+        for candidate_name in ["booking_df", "bookings_df", "sheet_df"]:
+            candidate = globals().get(candidate_name, None)
+            if isinstance(candidate, pd.DataFrame) and not candidate.empty:
+                df_ref_base = candidate.copy()
+                break
+    
+        if df_ref_base.empty:
+            st.warning("No data available in Supabase bookings table.")
+            st.stop()
+    
+        df_ref_base.columns = [str(c).strip() for c in df_ref_base.columns]
+    
+        # ---------------------------------------------------------
+        # Flexible column helpers
+        # ---------------------------------------------------------
+        def _norm_col_name(x) -> str:
+            return re.sub(r"[^a-z0-9]+", "", str(x or "").lower())
+    
+        def _find_col(df: pd.DataFrame, aliases: list[str]):
+            if df is None or df.empty:
+                return None
+    
+            cmap = {_norm_col_name(c): c for c in df.columns}
+    
+            for alias in aliases:
+                key = _norm_col_name(alias)
+                if key in cmap:
+                    return cmap[key]
+    
+            return None
+    
+        def _safe_str(x) -> str:
+            if x is None:
+                return ""
+            try:
+                if pd.isna(x):
+                    return ""
+            except Exception:
+                pass
+            s = str(x).strip()
+            if s.endswith(".0"):
+                s = s[:-2]
+            return s
+    
+        def _is_agreement_done(v) -> bool:
+            s = _safe_str(v).lower()
+            return (
+                s in {"done", "completed", "complete", "yes", "true", "1"}
+                or "done" in s
+                or "complete" in s
+            )
+    
+        def _is_referral_given(v) -> bool:
+            s = _safe_str(v).lower()
+            return s in {
+                "given",
+                "yes",
+                "done",
+                "paid",
+                "received",
+                "true",
+                "1",
+                "completed",
+                "complete",
+            }
+    
+        def _is_referral_lead(v) -> bool:
+            s = _safe_str(v).lower()
+            return "referral" in s or "reference" in s or s == "ref"
+    
+        # ---------------------------------------------------------
+        # Map actual columns
+        # ---------------------------------------------------------
+        col_customer = _find_col(df_ref_base, [
+            "customer_name", "customer name", "Customer Name", "name", "allottee_name", "allottee name"
+        ])
+    
+        col_wing = _find_col(df_ref_base, [
+            "wing", "Wing"
+        ])
+    
+        col_flat = _find_col(df_ref_base, [
+            "flat_number", "flat no", "flat number", "Flat Number", "Flat No", "unit", "unit_number"
+        ])
+    
+        col_lead = _find_col(df_ref_base, [
+            "lead_type", "lead type", "Lead Type", "source", "lead_source", "lead source"
+        ])
+    
+        col_agreement_done = _find_col(df_ref_base, [
+            "agreement_done", "agreement done", "Agreement Done", "agreement_status", "agreement status"
+        ])
+    
+        col_referral_given = _find_col(df_ref_base, [
+            "referral_given", "referral given", "Referral Given", "referral_status", "referral status"
+        ])
+    
+        col_sales_exec = _find_col(df_ref_base, [
+            "sales_executive", "sales executive", "Sales Executive", "executive", "handled_by", "handled by"
+        ])
+    
+        col_booking_date = _find_col(df_ref_base, [
+            "booking_date", "booking date", "Date", "date", "Booking Date"
+        ])
+    
+        col_type = _find_col(df_ref_base, [
+            "type", "Type", "unit_type", "unit type", "flat_type", "flat type", "configuration"
+        ])
+    
+        col_pan = _find_col(df_ref_base, [
+            "pan", "PAN", "pan_number", "pan number", "PAN Number"
+        ])
+    
+        # Referral given can be optional. If missing, we assume not given.
+        required_map = {
+            "Customer Name": col_customer,
+            "Wing": col_wing,
+            "Flat Number": col_flat,
+            "Lead Type": col_lead,
+            "Agreement Done": col_agreement_done,
+        }
+    
+        missing_required = [label for label, actual_col in required_map.items() if not actual_col]
+    
+        if missing_required:
+            st.error(
+                "Missing required booking columns: "
+                + ", ".join(missing_required)
+                + ". Please check your Supabase bookings table headers."
+            )
+    
+            with st.expander("Show actual columns found in bookings dataframe", expanded=True):
+                st.write(list(df_ref_base.columns))
+    
+            st.stop()
+    
+        # ---------------------------------------------------------
+        # Normalize working dataframe
+        # ---------------------------------------------------------
+        df = df_ref_base.copy()
+    
+        df["_customer_name"] = df[col_customer].apply(_safe_str)
+        df["_wing"] = df[col_wing].apply(_safe_str)
+        df["_flat_number"] = df[col_flat].apply(_safe_str)
+        df["_lead_type"] = df[col_lead].apply(_safe_str)
+        df["_agreement_done"] = df[col_agreement_done].apply(_safe_str)
+    
+        if col_referral_given:
+            df["_referral_given"] = df[col_referral_given].apply(_safe_str)
         else:
-            # Use Supabase-loaded bookings dataframe.
-            # Your top code sets booking_df = sheet_df.copy()
-            if "booking_df" in globals():
-                df_ref_base = booking_df.copy()
-            else:
-                df_ref_base = sheet_df.copy()
-
-            if df_ref_base.empty:
-                st.warning("No data available in Supabase bookings table.")
-            else:
-                required_cols = [
-                    "customer_name",
-                    "wing",
-                    "flat_number",
-                    "lead_type",
-                    "agreement_done",
-                    "referral_given",
-                    "sales_executive",
-                    "booking_date",
-                    "type"
-                ]
-
-                missing = [c for c in required_cols if c not in df_ref_base.columns]
-
-                if missing:
-                    st.error(f"Missing required columns in Supabase bookings table: {', '.join(missing)}")
+            df["_referral_given"] = ""
+    
+        if col_sales_exec:
+            df["_sales_executive"] = df[col_sales_exec].apply(_safe_str)
+        else:
+            df["_sales_executive"] = ""
+    
+        if col_booking_date:
+            df["_booking_date"] = df[col_booking_date].apply(_safe_str)
+        else:
+            df["_booking_date"] = ""
+    
+        if col_type:
+            df["_type"] = df[col_type].apply(_safe_str)
+        else:
+            df["_type"] = ""
+    
+        if col_pan:
+            df["_pan"] = df[col_pan].apply(_safe_str)
+        else:
+            df["_pan"] = ""
+    
+        # Remove blank customer rows
+        df = df[df["_customer_name"].astype(str).str.strip().ne("")].copy()
+    
+        if df.empty:
+            st.warning("No valid customer records found in bookings table.")
+            st.stop()
+    
+        # ---------------------------------------------------------
+        # Display helpers
+        # ---------------------------------------------------------
+        def flat_label(r):
+            wing = _safe_str(r.get("_wing", ""))
+            flat = _safe_str(r.get("_flat_number", ""))
+            fl = f"{wing} {flat}".strip()
+            return fl if fl else "NA"
+    
+        def label_row(i):
+            r = df.loc[i]
+            nm = _safe_str(r.get("_customer_name", ""))
+            fl = flat_label(r)
+            return f"{fl} - {nm}" if nm else fl
+    
+        def format_booking_date(v):
+            s = _safe_str(v)
+            if not s:
+                return "NA"
+    
+            try:
+                dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
+                if pd.notna(dt):
+                    return dt.strftime("%d/%m/%Y")
+            except Exception:
+                pass
+    
+            return s
+    
+        def get_unit_type_from_row(r):
+            val = _safe_str(r.get("_type", ""))
+            return val if val else "NA"
+    
+        # ---------------------------------------------------------
+        # Pending referral vouchers
+        # Rule:
+        #   Lead Type contains referral/reference
+        #   Agreement Done = done/completed/yes
+        #   Referral Given is not given/paid/done
+        # ---------------------------------------------------------
+        lead_ok = df["_lead_type"].apply(_is_referral_lead)
+        agree_ok = df["_agreement_done"].apply(_is_agreement_done)
+        ref_not_given = ~df["_referral_given"].apply(_is_referral_given)
+    
+        for_df = df[lead_ok & agree_ok & ref_not_given].copy()
+    
+        if for_df.empty:
+            st.info("✅ No pending referral vouchers.")
+            st.stop()
+    
+        # ---------------------------------------------------------
+        # Session state
+        # ---------------------------------------------------------
+        if "tab4_refinv_generated" not in st.session_state:
+            st.session_state.tab4_refinv_generated = False
+    
+        if (
+            "tab4_refinv_for_idx" not in st.session_state
+            or st.session_state.tab4_refinv_for_idx not in for_df.index
+        ):
+            st.session_state.tab4_refinv_for_idx = for_df.index[0]
+    
+        if (
+            "tab4_refinv_to_idx" not in st.session_state
+            or st.session_state.tab4_refinv_to_idx not in df.index
+        ):
+            st.session_state.tab4_refinv_to_idx = df.index[0]
+    
+        if "tab4_refinv_to_pan" not in st.session_state:
+            st.session_state.tab4_refinv_to_pan = ""
+    
+        # ---------------------------------------------------------
+        # Form
+        # ---------------------------------------------------------
+        with st.form("tab4_refinv_form"):
+            c1, c2 = st.columns(2)
+    
+            with c1:
+                st.selectbox(
+                    "For (Referred booking — Agreement Done & Referral not Given)",
+                    options=list(for_df.index),
+                    format_func=label_row,
+                    key="tab4_refinv_for_idx"
+                )
+    
+            with c2:
+                st.selectbox(
+                    "To (Referral amount will be given to)",
+                    options=list(df.index),
+                    format_func=label_row,
+                    key="tab4_refinv_to_idx"
+                )
+    
+            default_pan = ""
+            try:
+                to_idx_preview = st.session_state.get("tab4_refinv_to_idx")
+                if to_idx_preview in df.index:
+                    default_pan = _safe_str(df.loc[to_idx_preview].get("_pan", ""))
+            except Exception:
+                default_pan = ""
+    
+            if not st.session_state.get("tab4_refinv_to_pan") and default_pan:
+                st.session_state["tab4_refinv_to_pan"] = default_pan
+    
+            st.text_input(
+                "PAN Number (To Customer) — optional",
+                key="tab4_refinv_to_pan",
+                placeholder="Enter PAN e.g., ABCDE1234F"
+            )
+    
+            g = st.form_submit_button("Generate Voucher", use_container_width=True)
+    
+        if g:
+            st.session_state.tab4_refinv_generated = True
+    
+        if not st.session_state.tab4_refinv_generated:
+            st.info("Select **For** and **To**, enter PAN if needed, then click **Generate Voucher**.")
+            st.stop()
+    
+        # ---------------------------------------------------------
+        # Voucher data
+        # ---------------------------------------------------------
+        for_idx = st.session_state.tab4_refinv_for_idx
+        to_idx = st.session_state.tab4_refinv_to_idx
+    
+        for_row = df.loc[for_idx]
+        to_row = df.loc[to_idx]
+    
+        for_name = _safe_str(for_row.get("_customer_name", ""))
+        to_name = _safe_str(to_row.get("_customer_name", ""))
+    
+        for_flat = flat_label(for_row)
+        to_flat = flat_label(to_row)
+    
+        for_unit_type = get_unit_type_from_row(for_row)
+        sales_exec = _safe_str(for_row.get("_sales_executive", "")) or "NA"
+        to_pan = _safe_str(st.session_state.tab4_refinv_to_pan) or _safe_str(to_row.get("_pan", "")) or "NA"
+    
+        to_booking_date = format_booking_date(to_row.get("_booking_date", ""))
+        for_booking_date = format_booking_date(for_row.get("_booking_date", ""))
+    
+        gross_amount = 51000
+        tds_rate = 0.02
+        tds_amount = int(round(gross_amount * tds_rate))
+        net_amount = gross_amount - tds_amount
+    
+        inv_date = datetime.datetime.now()
+        date_str = inv_date.strftime("%d/%m/%Y")
+        place_str = "132/2, DSK Vishwa Rd, DSK Vishwa, Dhayari, Pune, Khadewadi, Maharashtra 411041"
+    
+        # ---------------------------------------------------------
+        # Number to words
+        # ---------------------------------------------------------
+        def num_to_words(n: int) -> str:
+            ones = [
+                "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+                "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+                "Seventeen", "Eighteen", "Nineteen"
+            ]
+            tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+    
+            def two_digits(x):
+                if x < 20:
+                    return ones[x]
+                return tens[x // 10] + ("" if x % 10 == 0 else " " + ones[x % 10])
+    
+            def three_digits(x):
+                h = x // 100
+                r = x % 100
+    
+                if h and r:
+                    return ones[h] + " Hundred " + two_digits(r)
+                if h:
+                    return ones[h] + " Hundred"
+    
+                return two_digits(r)
+    
+            if n == 0:
+                return "Zero"
+    
+            parts = []
+    
+            if n >= 10000000:
+                crores = n // 10000000
+                parts.append(three_digits(crores) + " Crore")
+                n %= 10000000
+    
+            if n >= 100000:
+                lakhs = n // 100000
+                parts.append(three_digits(lakhs) + " Lakh")
+                n %= 100000
+    
+            if n >= 1000:
+                th = n // 1000
+                parts.append(three_digits(th) + " Thousand")
+                n %= 1000
+    
+            if n > 0:
+                parts.append(three_digits(n))
+    
+            return " ".join([p.strip() for p in parts if p.strip()])
+    
+        amount_words = f"Rupees {num_to_words(net_amount)} Only"
+    
+        # ---------------------------------------------------------
+        # Preview cards
+        # ---------------------------------------------------------
+        st.markdown('<div class="rg-wrap">', unsafe_allow_html=True)
+    
+        st.markdown(
+            f"""
+            <div class="rg-card ok">
+              <div class="rg-label">Net Payable (After TDS)</div>
+              <div class="rg-value">₹ {net_amount:,.0f}
+                <span class="rg-kicker">Date: {date_str}</span>
+              </div>
+            </div>
+    
+            <div class="rg-card">
+              <div class="rg-label">Gross / TDS</div>
+              <div class="rg-value">₹ {gross_amount:,.0f}
+                <span class="rg-kicker">TDS 2%: ₹ {tds_amount:,.0f}</span>
+              </div>
+            </div>
+    
+            <div class="rg-card">
+              <div class="rg-label">To (Payable to)</div>
+              <div class="rg-value">{to_name}
+                <span class="rg-kicker">Flat: {to_flat} | PAN: {to_pan} | Booking: {to_booking_date}</span>
+              </div>
+            </div>
+    
+            <div class="rg-card info">
+              <div class="rg-label">For (Referred booking)</div>
+              <div class="rg-value">{for_name}
+                <span class="rg-kicker">Flat: {for_flat} | Unit: {for_unit_type} | Booking: {for_booking_date}</span>
+              </div>
+            </div>
+    
+            <div class="rg-card">
+              <div class="rg-label">Sales Executive</div>
+              <div class="rg-value">{sales_exec}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+        # ---------------------------------------------------------
+        # PDF helpers
+        # ---------------------------------------------------------
+        def pdf_safe(s):
+            s = str(s or "")
+            s = s.replace("₹", "Rs ").replace("—", "-").replace("•", "-").replace("→", "->")
+            return s.encode("latin1", "ignore").decode("latin1")
+    
+        def _safe_filename(name: str) -> str:
+            name = str(name or "").strip()
+            bad = '\\/:*?"<>|'
+    
+            for ch in bad:
+                name = name.replace(ch, "")
+    
+            name = " ".join(name.split())
+            return name
+    
+        # ---------------------------------------------------------
+        # Generate PDF
+        # ---------------------------------------------------------
+        pdf = FPDF("P", "mm", "A4")
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=False, margin=10)
+    
+        LEFT = 10
+        W = 190
+        HALF = W / 2
+        THIRD = W / 3
+        FOOTER_BOTTOM = 287
+        INSET = 1.2
+    
+        def double_rect(x, y, w, h, inset=INSET, outer=0.7, inner=0.25):
+            pdf.set_line_width(outer)
+            pdf.rect(x, y, w, h)
+            pdf.set_line_width(inner)
+            pdf.rect(x + inset, y + inset, w - 2 * inset, h - 2 * inset)
+            pdf.set_line_width(0.25)
+    
+        def vline_trim(x, y, h, inset=INSET, eps=0.25):
+            pdf.line(x, y + inset + eps, x, y + h - inset - eps)
+    
+        # Header
+        pdf.set_fill_color(37, 99, 235)
+        pdf.rect(0, 0, 210, 22, "F")
+        pdf.set_text_color(255, 255, 255)
+    
+        pdf.set_xy(LEFT, 6)
+        pdf.set_font("Arial", "B", 17)
+        pdf.cell(W * 0.70, 7, pdf_safe("LJR CONSTRUCTIONS LLP"), ln=0, align="L")
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(W * 0.30, 7, pdf_safe("PRATHAM VIHAR"), ln=1, align="R")
+    
+        pdf.set_font("Arial", "", 12)
+        pdf.set_xy(LEFT, 13)
+        pdf.cell(0, 6, pdf_safe("Referral Voucher"), ln=1, align="L")
+        pdf.set_text_color(0, 0, 0)
+    
+        y = 26
+        pdf.set_fill_color(245, 247, 250)
+        pdf.rect(LEFT, y, W, 12, "F")
+        pdf.set_font("Arial", "B", 11)
+        pdf.set_xy(LEFT + 2, y + 3)
+        pdf.cell(0, 6, pdf_safe(f"Date: {date_str}"), ln=1)
+    
+        y = y + 16
+        box_h = 50
+        double_rect(LEFT, y, W, box_h)
+        vline_trim(LEFT + HALF, y, box_h)
+    
+        # TO block
+        pdf.set_font("Arial", "B", 11)
+        pdf.set_xy(LEFT + 2, y + 3)
+        pdf.cell(0, 5, pdf_safe("TO (Referral amount payable to)"), ln=1)
+        pdf.set_font("Arial", "", 11)
+        pdf.set_x(LEFT + 2)
+        pdf.cell(0, 7, pdf_safe(f"Name: {to_name}"), ln=1)
+        pdf.set_x(LEFT + 2)
+        pdf.cell(0, 7, pdf_safe(f"Flat: {to_flat}"), ln=1)
+        pdf.set_x(LEFT + 2)
+        pdf.cell(0, 7, pdf_safe(f"Booking Date: {to_booking_date}"), ln=1)
+        pdf.set_x(LEFT + 2)
+        pdf.cell(0, 7, pdf_safe(f"PAN: {to_pan}"), ln=1)
+    
+        # FOR block
+        rx = LEFT + HALF + 2
+        pdf.set_font("Arial", "B", 11)
+        pdf.set_xy(rx, y + 3)
+        pdf.cell(0, 5, pdf_safe("FOR (Referred booking)"), ln=1)
+        pdf.set_font("Arial", "", 11)
+        pdf.set_x(rx)
+        pdf.cell(0, 7, pdf_safe(f"Name: {for_name}"), ln=1)
+        pdf.set_x(rx)
+        pdf.cell(0, 7, pdf_safe(f"Flat: {for_flat}"), ln=1)
+        pdf.set_x(rx)
+        pdf.cell(0, 7, pdf_safe(f"Booking Date: {for_booking_date}"), ln=1)
+        pdf.set_x(rx)
+        pdf.cell(0, 7, pdf_safe(f"Unit Type: {for_unit_type}"), ln=1)
+    
+        # Particulars table
+        y = y + box_h + 7
+        col1 = 135
+        col2 = W - col1
+        header_h = 11
+        pad = 2
+        line_h = 6.5
+    
+        rows = [
+            (
+                f"Referral incentive (Gross) for booking of {for_name} (Flat {for_flat}) - {for_unit_type}.",
+                f"{gross_amount:,.0f}",
+                False,
+                "R",
+                16
+            ),
+            ("TDS 2%", f"- {tds_amount:,.0f}", False, "R", 16),
+            ("Total Amount Payable", f"{net_amount:,.0f}", True, "R", 16),
+            ("Amount in words", amount_words, False, "L", 18),
+        ]
+    
+        def wrap_lines(text, max_w):
+            text = pdf_safe(text).strip()
+    
+            if not text:
+                return [""]
+    
+            words = text.split()
+            lines = []
+            cur = ""
+    
+            for w in words:
+                test = (cur + " " + w).strip()
+    
+                if pdf.get_string_width(test) <= max_w:
+                    cur = test
                 else:
-                    df = df_ref_base.copy()
-
-                    def flat_label(r):
-                        wing = str(r.get("wing", "") or "").strip()
-                        flat = str(r.get("flat_number", "") or "").strip()
-                        fl = f"{wing} {flat}".strip()
-                        return fl if fl else "NA"
-
-                    def label_row(i):
-                        r = df.loc[i]
-                        nm = str(r.get("customer_name", "") or "").strip()
-                        fl = flat_label(r)
-                        return f"{fl} - {nm}" if fl else nm
-
-                    def format_booking_date(v):
-                        if v is None:
-                            return "NA"
-                        s = str(v).strip()
-                        if not s or s.lower() in ("nan", "nat", "none"):
-                            return "NA"
-                        try:
-                            dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
-                            if pd.notna(dt):
-                                return dt.strftime("%d/%m/%Y")
-                        except Exception:
-                            pass
-                        return s
-
-                    def get_unit_type_from_row(r):
-                        val = str(r.get("type", "") or "").strip()
-                        return val if val else "NA"
-
-                    # Your current Supabase bookings table does not have PAN column.
-                    # So PAN is entered manually.
-                    def get_pan_from_row(r):
-                        return ""
-
-                    # Pending referral vouchers:
-                    # lead_type contains referral + agreement_done done + referral_given not given
-                    lead_ok = (
-                        df["lead_type"]
-                        .fillna("")
-                        .astype(str)
-                        .str.strip()
-                        .str.lower()
-                        .str.contains("referral", na=False)
-                    )
-
-                    agree_ok = (
-                        df["agreement_done"]
-                        .fillna("")
-                        .astype(str)
-                        .str.strip()
-                        .str.lower()
-                        .eq("done")
-                    )
-
-                    ref_not_given = ~(
-                        df["referral_given"]
-                        .fillna("")
-                        .astype(str)
-                        .str.strip()
-                        .str.lower()
-                        .eq("given")
-                    )
-
-                    for_df = df[lead_ok & agree_ok & ref_not_given].copy()
-
-                    if for_df.empty:
-                        st.info("✅ No pending referral vouchers.")
-                    else:
-                        if "tab4_refinv_generated" not in st.session_state:
-                            st.session_state.tab4_refinv_generated = False
-
-                        if "tab4_refinv_for_idx" not in st.session_state or st.session_state.tab4_refinv_for_idx not in for_df.index:
-                            st.session_state.tab4_refinv_for_idx = for_df.index[0]
-
-                        if "tab4_refinv_to_idx" not in st.session_state or st.session_state.tab4_refinv_to_idx not in df.index:
-                            st.session_state.tab4_refinv_to_idx = df.index[0]
-
-                        if "tab4_refinv_to_pan" not in st.session_state:
-                            st.session_state.tab4_refinv_to_pan = ""
-
-                        with st.form("tab4_refinv_form"):
-                            c1, c2 = st.columns(2)
-
-                            with c1:
-                                st.selectbox(
-                                    "For (Referred booking — Agreement Done & Referral not Given)",
-                                    options=list(for_df.index),
-                                    format_func=label_row,
-                                    key="tab4_refinv_for_idx"
-                                )
-
-                            with c2:
-                                st.selectbox(
-                                    "To (Referral amount will be given to)",
-                                    options=list(df.index),
-                                    format_func=label_row,
-                                    key="tab4_refinv_to_idx"
-                                )
-
-                            st.text_input(
-                                "PAN Number (To Customer) — optional",
-                                key="tab4_refinv_to_pan",
-                                placeholder="Enter PAN e.g., ABCDE1234F"
-                            )
-
-                            g = st.form_submit_button("Generate Voucher")
-
-                        if g:
-                            st.session_state.tab4_refinv_generated = True
-
-                        if not st.session_state.tab4_refinv_generated:
-                            st.info("Select **For** and **To**, enter PAN if needed, then click **Generate Voucher**.")
-                        else:
-                            for_idx = st.session_state.tab4_refinv_for_idx
-                            to_idx = st.session_state.tab4_refinv_to_idx
-
-                            for_row = df.loc[for_idx]
-                            to_row = df.loc[to_idx]
-
-                            for_name = str(for_row.get("customer_name", "") or "").strip()
-                            to_name = str(to_row.get("customer_name", "") or "").strip()
-
-                            for_flat = flat_label(for_row)
-                            to_flat = flat_label(to_row)
-
-                            for_unit_type = get_unit_type_from_row(for_row)
-                            sales_exec = str(for_row.get("sales_executive", "") or "").strip() or "NA"
-                            to_pan = str(st.session_state.tab4_refinv_to_pan or "").strip() or "NA"
-
-                            to_booking_date = format_booking_date(to_row.get("booking_date"))
-                            for_booking_date = format_booking_date(for_row.get("booking_date"))
-
-                            gross_amount = 51000
-                            tds_rate = 0.02
-                            tds_amount = int(round(gross_amount * tds_rate))
-                            net_amount = gross_amount - tds_amount
-
-                            inv_date = datetime.datetime.now()
-                            date_str = inv_date.strftime("%d/%m/%Y")
-                            place_str = "132/2, DSK Vishwa Rd, DSK Vishwa, Dhayari, Pune, Khadewadi, Maharashtra 411041"
-
-                            def num_to_words(n: int) -> str:
-                                ones = [
-                                    "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
-                                    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
-                                    "Seventeen", "Eighteen", "Nineteen"
-                                ]
-                                tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
-
-                                def two_digits(x):
-                                    if x < 20:
-                                        return ones[x]
-                                    return tens[x // 10] + ("" if x % 10 == 0 else " " + ones[x % 10])
-
-                                def three_digits(x):
-                                    h = x // 100
-                                    r = x % 100
-
-                                    if h and r:
-                                        return ones[h] + " Hundred " + two_digits(r)
-                                    if h:
-                                        return ones[h] + " Hundred"
-
-                                    return two_digits(r)
-
-                                if n == 0:
-                                    return "Zero"
-
-                                parts = []
-
-                                if n >= 10000000:
-                                    crores = n // 10000000
-                                    parts.append(three_digits(crores) + " Crore")
-                                    n %= 10000000
-
-                                if n >= 100000:
-                                    lakhs = n // 100000
-                                    parts.append(three_digits(lakhs) + " Lakh")
-                                    n %= 100000
-
-                                if n >= 1000:
-                                    th = n // 1000
-                                    parts.append(three_digits(th) + " Thousand")
-                                    n %= 1000
-
-                                if n > 0:
-                                    parts.append(three_digits(n))
-
-                                return " ".join([p.strip() for p in parts if p.strip()])
-
-                            amount_words = f"Rupees {num_to_words(net_amount)} Only"
-
-                            st.markdown('<div class="rg-wrap">', unsafe_allow_html=True)
-                            st.markdown(f"""
-                            <div class="rg-card ok">
-                              <div class="rg-label">Net Payable (After TDS)</div>
-                              <div class="rg-value">₹ {net_amount:,.0f}
-                                <span class="rg-kicker">• Date: {date_str}</span>
-                              </div>
-                            </div>
-
-                            <div class="rg-card">
-                              <div class="rg-label">Gross / TDS</div>
-                              <div class="rg-value">₹ {gross_amount:,.0f}
-                                <span class="rg-kicker">• TDS 2%: ₹ {tds_amount:,.0f}</span>
-                              </div>
-                            </div>
-
-                            <div class="rg-card">
-                              <div class="rg-label">To (Payable to)</div>
-                              <div class="rg-value">{to_name}
-                                <span class="rg-kicker">• Flat: {to_flat} • PAN: {to_pan} • Booking: {to_booking_date}</span>
-                              </div>
-                            </div>
-
-                            <div class="rg-card info">
-                              <div class="rg-label">For (Referred booking)</div>
-                              <div class="rg-value">{for_name}
-                                <span class="rg-kicker">• Flat: {for_flat} • Unit: {for_unit_type} • Booking: {for_booking_date}</span>
-                              </div>
-                            </div>
-
-                            <div class="rg-card">
-                              <div class="rg-label">Sales Executive</div>
-                              <div class="rg-value">{sales_exec}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            st.markdown("</div>", unsafe_allow_html=True)
-
-                            def pdf_safe(s):
-                                s = str(s or "")
-                                s = s.replace("₹", "Rs ").replace("—", "-").replace("•", "-")
-                                return s.encode("latin1", "ignore").decode("latin1")
-
-                            pdf = FPDF("P", "mm", "A4")
-                            pdf.add_page()
-                            pdf.set_auto_page_break(auto=False, margin=10)
-
-                            LEFT = 10
-                            W = 190
-                            HALF = W / 2
-                            THIRD = W / 3
-                            FOOTER_BOTTOM = 287
-                            INSET = 1.2
-
-                            def double_rect(x, y, w, h, inset=INSET, outer=0.7, inner=0.25):
-                                pdf.set_line_width(outer)
-                                pdf.rect(x, y, w, h)
-                                pdf.set_line_width(inner)
-                                pdf.rect(x + inset, y + inset, w - 2 * inset, h - 2 * inset)
-                                pdf.set_line_width(0.25)
-
-                            def vline_trim(x, y, h, inset=INSET, eps=0.25):
-                                pdf.line(x, y + inset + eps, x, y + h - inset - eps)
-
-                            # Header
-                            pdf.set_fill_color(37, 99, 235)
-                            pdf.rect(0, 0, 210, 22, "F")
-                            pdf.set_text_color(255, 255, 255)
-
-                            pdf.set_xy(LEFT, 6)
-                            pdf.set_font("Arial", "B", 17)
-                            pdf.cell(W * 0.70, 7, pdf_safe("LJR CONSTRUCTIONS LLP"), ln=0, align="L")
-                            pdf.set_font("Arial", "B", 14)
-                            pdf.cell(W * 0.30, 7, pdf_safe("PRATHAM VIHAR"), ln=1, align="R")
-
-                            pdf.set_font("Arial", "", 12)
-                            pdf.set_xy(LEFT, 13)
-                            pdf.cell(0, 6, pdf_safe("Referral Voucher"), ln=1, align="L")
-                            pdf.set_text_color(0, 0, 0)
-
-                            y = 26
-                            pdf.set_fill_color(245, 247, 250)
-                            pdf.rect(LEFT, y, W, 12, "F")
-                            pdf.set_font("Arial", "B", 11)
-                            pdf.set_xy(LEFT + 2, y + 3)
-                            pdf.cell(0, 6, pdf_safe(f"Date: {date_str}"), ln=1)
-
-                            y = y + 16
-                            box_h = 50
-                            double_rect(LEFT, y, W, box_h)
-                            vline_trim(LEFT + HALF, y, box_h)
-
-                            # TO
-                            pdf.set_font("Arial", "B", 11)
-                            pdf.set_xy(LEFT + 2, y + 3)
-                            pdf.cell(0, 5, pdf_safe("TO (Referral amount payable to)"), ln=1)
-                            pdf.set_font("Arial", "", 11)
-                            pdf.set_x(LEFT + 2)
-                            pdf.cell(0, 7, pdf_safe(f"Name: {to_name}"), ln=1)
-                            pdf.set_x(LEFT + 2)
-                            pdf.cell(0, 7, pdf_safe(f"Flat: {to_flat}"), ln=1)
-                            pdf.set_x(LEFT + 2)
-                            pdf.cell(0, 7, pdf_safe(f"Booking Date: {to_booking_date}"), ln=1)
-                            pdf.set_x(LEFT + 2)
-                            pdf.cell(0, 7, pdf_safe(f"PAN: {to_pan}"), ln=1)
-
-                            # FOR
-                            rx = LEFT + HALF + 2
-                            pdf.set_font("Arial", "B", 11)
-                            pdf.set_xy(rx, y + 3)
-                            pdf.cell(0, 5, pdf_safe("FOR (Referred booking)"), ln=1)
-                            pdf.set_font("Arial", "", 11)
-                            pdf.set_x(rx)
-                            pdf.cell(0, 7, pdf_safe(f"Name: {for_name}"), ln=1)
-                            pdf.set_x(rx)
-                            pdf.cell(0, 7, pdf_safe(f"Flat: {for_flat}"), ln=1)
-                            pdf.set_x(rx)
-                            pdf.cell(0, 7, pdf_safe(f"Booking Date: {for_booking_date}"), ln=1)
-                            pdf.set_x(rx)
-                            pdf.cell(0, 7, pdf_safe(f"Unit Type: {for_unit_type}"), ln=1)
-
-                            # Particulars table
-                            y = y + box_h + 7
-                            col1 = 135
-                            col2 = W - col1
-                            header_h = 11
-                            pad = 2
-                            line_h = 6.5
-
-                            rows = [
-                                (
-                                    f"Referral incentive (Gross) for booking of {for_name} (Flat {for_flat}) - {for_unit_type}.",
-                                    f"{gross_amount:,.0f}",
-                                    False,
-                                    "R",
-                                    16
-                                ),
-                                ("TDS 2%", f"- {tds_amount:,.0f}", False, "R", 16),
-                                ("Total Amount Payable", f"{net_amount:,.0f}", True, "R", 16),
-                                ("Amount in words", amount_words, False, "L", 18),
-                            ]
-
-                            def wrap_lines(text, max_w):
-                                text = pdf_safe(text).strip()
-
-                                if not text:
-                                    return [""]
-
-                                words = text.split()
-                                lines = []
-                                cur = ""
-
-                                for w in words:
-                                    test = (cur + " " + w).strip()
-
-                                    if pdf.get_string_width(test) <= max_w:
-                                        cur = test
-                                    else:
-                                        if cur:
-                                            lines.append(cur)
-                                        cur = w
-
-                                if cur:
-                                    lines.append(cur)
-
-                                return lines
-
-                            pdf.set_font("Arial", "", 11)
-                            row_heights = []
-
-                            for lt, rt, bold, align, min_h in rows:
-                                ll = wrap_lines(lt, col1 - 2 * pad)
-                                rl = wrap_lines(rt, col2 - 2 * pad)
-                                n = max(len(ll), len(rl))
-                                row_h = max(min_h, n * line_h + 2 * pad)
-                                row_heights.append(row_h)
-
-                            total_h = header_h + sum(row_heights)
-
-                            pdf.set_line_width(0.7)
-                            pdf.rect(LEFT, y, W, total_h)
-                            pdf.set_line_width(0.25)
-
-                            pdf.set_fill_color(235, 242, 255)
-                            pdf.rect(LEFT, y, W, header_h, "F")
-                            pdf.line(LEFT + col1, y, LEFT + col1, y + total_h)
-                            pdf.line(LEFT, y + header_h, LEFT + W, y + header_h)
-
-                            pdf.set_font("Arial", "B", 12)
-                            pdf.set_xy(LEFT + 2, y + 3)
-                            pdf.cell(col1 - 4, 5, pdf_safe("Particulars"), 0, 0, "L")
-                            pdf.set_xy(LEFT + col1 + 2, y + 3)
-                            pdf.cell(col2 - 4, 5, pdf_safe("Amount (Rs.)"), 0, 0, "R")
-
-                            y_cur = y + header_h
-
-                            for i, rh in enumerate(row_heights):
-                                y_next = y_cur + rh
-
-                                if i < len(row_heights) - 1:
-                                    pdf.line(LEFT, y_next, LEFT + W, y_next)
-
-                                y_cur = y_next
-
-                            y_cur = y + header_h
-
-                            for (lt, rt, bold, align, min_h), rh in zip(rows, row_heights):
-                                pdf.set_font("Arial", "B" if bold else "", 11)
-                                ll = wrap_lines(lt, col1 - 2 * pad)
-                                rl = wrap_lines(rt, col2 - 2 * pad)
-                                n = max(len(ll), len(rl))
-                                text_y = y_cur + pad
-
-                                for i in range(n):
-                                    if i < len(ll):
-                                        pdf.set_xy(LEFT + pad, text_y + i * line_h)
-                                        pdf.cell(col1 - 2 * pad, line_h, ll[i], 0, 0, "L")
-
-                                    if i < len(rl):
-                                        pdf.set_xy(LEFT + col1 + pad, text_y + i * line_h)
-                                        pdf.cell(col2 - 2 * pad, line_h, rl[i], 0, 0, align)
-
-                                y_cur += rh
-
-                            end_y = y + total_h
-
-                            # Footer layout
-                            note_h = 12
-                            sig_h = 64
-                            ack_h = 18
-                            field_h = 24
-                            gap = 4
-
-                            min_note_h = 10
-                            min_sig_h = 46
-                            min_ack_h = 14
-                            min_field_h = 20
-                            min_gap = 1
-
-                            min_top = end_y + 6
-
-                            def compute_positions(gap_, sig_h_, ack_h_, field_h_, note_h_):
-                                note_y_ = FOOTER_BOTTOM - note_h_
-                                sig_y_ = note_y_ - gap_ - sig_h_
-                                ack_y_ = sig_y_ - gap_ - ack_h_
-                                fld_y_ = ack_y_ - gap_ - field_h_
-                                return note_y_, sig_y_, ack_y_, fld_y_
-
-                            while True:
-                                note_y, sig_y, ack_y, field_y = compute_positions(gap, sig_h, ack_h, field_h, note_h)
-
-                                if field_y >= min_top:
-                                    break
-
-                                if gap > min_gap:
-                                    gap -= 1
-                                elif sig_h > min_sig_h:
-                                    sig_h -= 2
-                                elif ack_h > min_ack_h:
-                                    ack_h -= 2
-                                elif field_h > min_field_h:
-                                    field_h -= 2
-                                elif note_h > min_note_h:
-                                    note_h -= 1
-                                else:
-                                    break
-
-                            # Cheque details
-                            y = field_y
-                            double_rect(LEFT, y, W, field_h)
-                            vline_trim(LEFT + THIRD, y, field_h)
-                            vline_trim(LEFT + 2 * THIRD, y, field_h)
-
-                            pdf.set_font("Arial", "B", 11)
-                            headings = ["Cheque No.", "Date of Cheque", "Bank Name"]
-
-                            for i, htxt in enumerate(headings):
-                                x0 = LEFT + i * THIRD
-                                pdf.set_xy(x0, y + 3)
-                                pdf.cell(THIRD, 6, pdf_safe(htxt), border=0, align="C")
-                                pdf.line(x0 + 10, y + 18, x0 + THIRD - 10, y + 18)
-
-                            # Acknowledgment
-                            y = ack_y
-                            double_rect(LEFT, y, W, ack_h)
-                            pdf.set_font("Arial", "", 10)
-                            pdf.set_xy(LEFT + 2, y + 4)
-                            pdf.multi_cell(
-                                W - 4,
-                                5,
-                                pdf_safe("Acknowledgment: By signing below, the recipient acknowledges the receipt/entitlement of the above referral incentive amount."),
-                                border=0
-                            )
-
-                            # Signatures
-                            y = sig_y
-                            double_rect(LEFT, y, W, sig_h)
-                            vline_trim(LEFT + HALF, y, sig_h)
-
-                            # Customer signature
-                            pdf.set_xy(LEFT + 2, y + 4)
-                            pdf.set_font("Arial", "B", 11)
-                            pdf.cell(0, 6, pdf_safe("Customer Signature (To)"), ln=1)
-                            pdf.set_font("Arial", "", 10)
-                            pdf.set_x(LEFT + 2)
-                            pdf.cell(0, 6, pdf_safe(f"Name: {to_name}"), ln=1)
-                            pdf.set_x(LEFT + 2)
-                            pdf.cell(0, 6, pdf_safe(f"Date: {date_str}"), ln=1)
-                            pdf.set_x(LEFT + 2)
-                            pdf.multi_cell(HALF - 6, 5, pdf_safe(f"Place: {place_str}"), border=0)
-                            pdf.line(LEFT + 2, y + sig_h - 10, LEFT + HALF - 5, y + sig_h - 10)
-                            pdf.set_xy(LEFT + 2, y + sig_h - 9)
-                            pdf.cell(0, 5, pdf_safe("Signature"), ln=1)
-
-                            # Sales executive signature
-                            pdf.set_xy(LEFT + HALF + 2, y + 4)
-                            pdf.set_font("Arial", "B", 11)
-                            pdf.cell(0, 6, pdf_safe("Sales Executive Signature"), ln=1)
-                            pdf.set_font("Arial", "", 10)
-                            pdf.set_x(LEFT + HALF + 2)
-                            pdf.cell(0, 6, pdf_safe(f"Name: {sales_exec}"), ln=1)
-                            pdf.set_x(LEFT + HALF + 2)
-                            pdf.cell(0, 6, pdf_safe(f"Date: {date_str}"), ln=1)
-                            pdf.set_x(LEFT + HALF + 2)
-                            pdf.multi_cell(HALF - 6, 5, pdf_safe(f"Place: {place_str}"), border=0)
-                            pdf.line(LEFT + HALF + 2, y + sig_h - 10, LEFT + W - 2, y + sig_h - 10)
-                            pdf.set_xy(LEFT + HALF + 2, y + sig_h - 9)
-                            pdf.cell(0, 5, pdf_safe("Signature"), ln=1)
-
-                            # Note
-                            y = note_y
-                            double_rect(LEFT, y, W, note_h)
-                            pdf.set_font("Arial", "I", 9)
-                            pdf.set_xy(LEFT + 2, y + 3)
-                            pdf.multi_cell(
-                                W - 4,
-                                4,
-                                pdf_safe("Note: TDS @ 2% is applicable as per prevailing Income Tax rules. Net payable amount is after TDS deduction."),
-                                border=0
-                            )
-
-                            out = pdf.output(dest="S")
-                            pdf_bytes = bytes(out) if isinstance(out, (bytes, bytearray)) else out.encode("latin1", "ignore")
-                            b64 = base64.b64encode(pdf_bytes).decode()
-
-                            def _safe_filename(name: str) -> str:
-                                name = str(name or "").strip()
-                                bad = '\\/:*?"<>|'
-
-                                for ch in bad:
-                                    name = name.replace(ch, "")
-
-                                name = " ".join(name.split())
-                                return name
-
-                            safe_to_name = _safe_filename(to_name)
-                            filename = f"Referral Voucher - {safe_to_name}.pdf" if safe_to_name else "Referral Voucher.pdf"
-
-                            st.markdown(
-                                f'<a class="rg-download" href="data:application/octet-stream;base64,{b64}" download="{filename}">⬇️ Download Referral Voucher (A4 PDF)</a>',
-                                unsafe_allow_html=True
-                            )
-
+                    if cur:
+                        lines.append(cur)
+                    cur = w
+    
+            if cur:
+                lines.append(cur)
+    
+            return lines
+    
+        pdf.set_font("Arial", "", 11)
+        row_heights = []
+    
+        for lt, rt, bold, align, min_h in rows:
+            ll = wrap_lines(lt, col1 - 2 * pad)
+            rl = wrap_lines(rt, col2 - 2 * pad)
+            n = max(len(ll), len(rl))
+            row_h = max(min_h, n * line_h + 2 * pad)
+            row_heights.append(row_h)
+    
+        total_h = header_h + sum(row_heights)
+    
+        pdf.set_line_width(0.7)
+        pdf.rect(LEFT, y, W, total_h)
+        pdf.set_line_width(0.25)
+    
+        pdf.set_fill_color(235, 242, 255)
+        pdf.rect(LEFT, y, W, header_h, "F")
+        pdf.line(LEFT + col1, y, LEFT + col1, y + total_h)
+        pdf.line(LEFT, y + header_h, LEFT + W, y + header_h)
+    
+        pdf.set_font("Arial", "B", 12)
+        pdf.set_xy(LEFT + 2, y + 3)
+        pdf.cell(col1 - 4, 5, pdf_safe("Particulars"), 0, 0, "L")
+        pdf.set_xy(LEFT + col1 + 2, y + 3)
+        pdf.cell(col2 - 4, 5, pdf_safe("Amount (Rs.)"), 0, 0, "R")
+    
+        y_cur = y + header_h
+    
+        for i, rh in enumerate(row_heights):
+            y_next = y_cur + rh
+    
+            if i < len(row_heights) - 1:
+                pdf.line(LEFT, y_next, LEFT + W, y_next)
+    
+            y_cur = y_next
+    
+        y_cur = y + header_h
+    
+        for (lt, rt, bold, align, min_h), rh in zip(rows, row_heights):
+            pdf.set_font("Arial", "B" if bold else "", 11)
+            ll = wrap_lines(lt, col1 - 2 * pad)
+            rl = wrap_lines(rt, col2 - 2 * pad)
+            n = max(len(ll), len(rl))
+            text_y = y_cur + pad
+    
+            for i in range(n):
+                if i < len(ll):
+                    pdf.set_xy(LEFT + pad, text_y + i * line_h)
+                    pdf.cell(col1 - 2 * pad, line_h, ll[i], 0, 0, "L")
+    
+                if i < len(rl):
+                    pdf.set_xy(LEFT + col1 + pad, text_y + i * line_h)
+                    pdf.cell(col2 - 2 * pad, line_h, rl[i], 0, 0, align)
+    
+            y_cur += rh
+    
+        end_y = y + total_h
+    
+        # Footer layout
+        note_h = 12
+        sig_h = 64
+        ack_h = 18
+        field_h = 24
+        gap = 4
+    
+        min_note_h = 10
+        min_sig_h = 46
+        min_ack_h = 14
+        min_field_h = 20
+        min_gap = 1
+    
+        min_top = end_y + 6
+    
+        def compute_positions(gap_, sig_h_, ack_h_, field_h_, note_h_):
+            note_y_ = FOOTER_BOTTOM - note_h_
+            sig_y_ = note_y_ - gap_ - sig_h_
+            ack_y_ = sig_y_ - gap_ - ack_h_
+            fld_y_ = ack_y_ - gap_ - field_h_
+            return note_y_, sig_y_, ack_y_, fld_y_
+    
+        while True:
+            note_y, sig_y, ack_y, field_y = compute_positions(gap, sig_h, ack_h, field_h, note_h)
+    
+            if field_y >= min_top:
+                break
+    
+            if gap > min_gap:
+                gap -= 1
+            elif sig_h > min_sig_h:
+                sig_h -= 2
+            elif ack_h > min_ack_h:
+                ack_h -= 2
+            elif field_h > min_field_h:
+                field_h -= 2
+            elif note_h > min_note_h:
+                note_h -= 1
+            else:
+                break
+    
+        # Cheque details
+        y = field_y
+        double_rect(LEFT, y, W, field_h)
+        vline_trim(LEFT + THIRD, y, field_h)
+        vline_trim(LEFT + 2 * THIRD, y, field_h)
+    
+        pdf.set_font("Arial", "B", 11)
+        headings = ["Cheque No.", "Date of Cheque", "Bank Name"]
+    
+        for i, htxt in enumerate(headings):
+            x0 = LEFT + i * THIRD
+            pdf.set_xy(x0, y + 3)
+            pdf.cell(THIRD, 6, pdf_safe(htxt), border=0, align="C")
+            pdf.line(x0 + 10, y + 18, x0 + THIRD - 10, y + 18)
+    
+        # Acknowledgment
+        y = ack_y
+        double_rect(LEFT, y, W, ack_h)
+        pdf.set_font("Arial", "", 10)
+        pdf.set_xy(LEFT + 2, y + 4)
+        pdf.multi_cell(
+            W - 4,
+            5,
+            pdf_safe("Acknowledgment: By signing below, the recipient acknowledges the receipt/entitlement of the above referral incentive amount."),
+            border=0
+        )
+    
+        # Signatures
+        y = sig_y
+        double_rect(LEFT, y, W, sig_h)
+        vline_trim(LEFT + HALF, y, sig_h)
+    
+        # Customer signature
+        pdf.set_xy(LEFT + 2, y + 4)
+        pdf.set_font("Arial", "B", 11)
+        pdf.cell(0, 6, pdf_safe("Customer Signature (To)"), ln=1)
+        pdf.set_font("Arial", "", 10)
+        pdf.set_x(LEFT + 2)
+        pdf.cell(0, 6, pdf_safe(f"Name: {to_name}"), ln=1)
+        pdf.set_x(LEFT + 2)
+        pdf.cell(0, 6, pdf_safe(f"Date: {date_str}"), ln=1)
+        pdf.set_x(LEFT + 2)
+        pdf.multi_cell(HALF - 6, 5, pdf_safe(f"Place: {place_str}"), border=0)
+        pdf.line(LEFT + 2, y + sig_h - 10, LEFT + HALF - 5, y + sig_h - 10)
+        pdf.set_xy(LEFT + 2, y + sig_h - 9)
+        pdf.cell(0, 5, pdf_safe("Signature"), ln=1)
+    
+        # Sales executive signature
+        pdf.set_xy(LEFT + HALF + 2, y + 4)
+        pdf.set_font("Arial", "B", 11)
+        pdf.cell(0, 6, pdf_safe("Sales Executive Signature"), ln=1)
+        pdf.set_font("Arial", "", 10)
+        pdf.set_x(LEFT + HALF + 2)
+        pdf.cell(0, 6, pdf_safe(f"Name: {sales_exec}"), ln=1)
+        pdf.set_x(LEFT + HALF + 2)
+        pdf.cell(0, 6, pdf_safe(f"Date: {date_str}"), ln=1)
+        pdf.set_x(LEFT + HALF + 2)
+        pdf.multi_cell(HALF - 6, 5, pdf_safe(f"Place: {place_str}"), border=0)
+        pdf.line(LEFT + HALF + 2, y + sig_h - 10, LEFT + W - 2, y + sig_h - 10)
+        pdf.set_xy(LEFT + HALF + 2, y + sig_h - 9)
+        pdf.cell(0, 5, pdf_safe("Signature"), ln=1)
+    
+        # Note
+        y = note_y
+        double_rect(LEFT, y, W, note_h)
+        pdf.set_font("Arial", "I", 9)
+        pdf.set_xy(LEFT + 2, y + 3)
+        pdf.multi_cell(
+            W - 4,
+            4,
+            pdf_safe("Note: TDS @ 2% is applicable as per prevailing Income Tax rules. Net payable amount is after TDS deduction."),
+            border=0
+        )
+    
+        out = pdf.output(dest="S")
+        pdf_bytes = bytes(out) if isinstance(out, (bytes, bytearray)) else out.encode("latin1", "ignore")
+        b64 = base64.b64encode(pdf_bytes).decode()
+    
+        safe_to_name = _safe_filename(to_name)
+        filename = f"Referral Voucher - {safe_to_name}.pdf" if safe_to_name else "Referral Voucher.pdf"
+    
+        st.markdown(
+            f'<a class="rg-download" href="data:application/octet-stream;base64,{b64}" download="{filename}">⬇️ Download Referral Voucher (A4 PDF)</a>',
+            unsafe_allow_html=True
+        )
     # =========================================================
     # SUBTAB 3: AGREEMENT SCHEDULE
     # =========================================================
