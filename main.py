@@ -20831,7 +20831,7 @@ with tab11:
     st.title("📆 Daily Visits")
 
     # ============================================================
-    # Supabase guard
+    # SUPABASE CHECK
     # ============================================================
     if "supabase" not in globals() or supabase is None:
         st.warning("📋 Supabase client is not initialized. Please check your Supabase connection block.")
@@ -20840,7 +20840,7 @@ with tab11:
     DAILY_VISITS_TABLE = "daily_visits"
 
     # ============================================================
-    # UI polish
+    # UI POLISH
     # ============================================================
     st.markdown(
         """
@@ -20870,17 +20870,33 @@ with tab11:
         }
         .section-title{
             font-size: 1.02rem;
-            font-weight: 700;
+            font-weight: 800;
             margin-top: 8px;
             margin-bottom: 8px;
+            color:#0f172a;
+        }
+        .dv-note{
+            background:#eff6ff;
+            border:1px solid #bfdbfe;
+            color:#1e3a8a;
+            border-radius:14px;
+            padding:12px 14px;
+            font-weight:700;
+            margin-bottom:14px;
         }
         </style>
         """,
         unsafe_allow_html=True
     )
 
+    st.markdown(
+        "<div class='dv-note'>Enter source-wise visits and executive-wise performance. "
+        "If an entry for the selected date already exists, it will be updated. Otherwise, a new row will be inserted.</div>",
+        unsafe_allow_html=True
+    )
+
     # ============================================================
-    # Helpers
+    # HELPERS
     # ============================================================
     def _to_int(x):
         try:
@@ -20888,40 +20904,86 @@ with tab11:
         except Exception:
             return 0
 
-    def _date_to_iso(d: datetime.date) -> str:
-        return d.strftime("%Y-%m-%d")
+    def _date_to_sheet_text(d: datetime.date) -> str:
+        # Same as old imported data: 24/03/25
+        return d.strftime("%d/%m/%y")
 
     def _month_label(d: datetime.date) -> str:
-        return d.strftime("%B %y").upper()
+        # Same as old imported data: Mar-25
+        return d.strftime("%b-%y")
+
+    def _parse_any_date_to_date(x):
+        s = str(x or "").strip().replace("'", "")
+        if not s:
+            return None
+
+        for fmt in ("%d/%m/%y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%y", "%d-%m-%Y"):
+            try:
+                return datetime.datetime.strptime(s, fmt).date()
+            except Exception:
+                pass
+
+        try:
+            ts = pd.to_datetime(s, dayfirst=True, errors="coerce")
+            if pd.isna(ts):
+                return None
+            return ts.date()
+        except Exception:
+            return None
 
     def _fetch_existing_daily_visit(target_date: datetime.date):
+        """
+        Finds existing row even if old table has date as 14/05/26,
+        14/05/2026, or mistakenly saved as 2026-05-14.
+        """
         try:
+            possible_dates = [
+                target_date.strftime("%d/%m/%y"),
+                target_date.strftime("%d/%m/%Y"),
+                target_date.strftime("%Y-%m-%d"),
+            ]
+
             res = (
                 supabase
                 .table(DAILY_VISITS_TABLE)
                 .select("*")
-                .eq("visit_date", _date_to_iso(target_date))
+                .in_("visit_date", possible_dates)
                 .order("id", desc=True)
                 .execute()
             )
+
             return getattr(res, "data", []) or []
+
         except Exception as e:
             st.error(f"❌ Error checking existing Daily Visits row: {e}")
             return []
 
     def _insert_daily_visit(payload: dict):
-        return supabase.table(DAILY_VISITS_TABLE).insert(payload).execute()
+        res = (
+            supabase
+            .table(DAILY_VISITS_TABLE)
+            .insert(payload)
+            .execute()
+        )
+        return getattr(res, "data", []) or []
 
     def _update_daily_visit(row_id: int, payload: dict):
-        return supabase.table(DAILY_VISITS_TABLE).update(payload).eq("id", row_id).execute()
+        res = (
+            supabase
+            .table(DAILY_VISITS_TABLE)
+            .update(payload)
+            .eq("id", row_id)
+            .execute()
+        )
+        return getattr(res, "data", []) or []
 
-    def _load_recent_daily_visits(limit: int = 10) -> pd.DataFrame:
+    def _load_recent_daily_visits(limit: int = 12) -> pd.DataFrame:
         try:
             res = (
                 supabase
                 .table(DAILY_VISITS_TABLE)
                 .select("*")
-                .order("visit_date", desc=True)
+                .order("id", desc=True)
                 .limit(limit)
                 .execute()
             )
@@ -20931,7 +20993,7 @@ with tab11:
             return pd.DataFrame()
 
     # ============================================================
-    # Festival dropdown options
+    # FESTIVAL OPTIONS
     # ============================================================
     FESTIVALS = [
         "New Year",
@@ -20986,11 +21048,13 @@ with tab11:
         return str(choice).strip()
 
     # ============================================================
-    # Sales executives
-    # Add future executives here only.
-    # Make sure matching columns exist in Supabase:
-    # {exec_key}_revisits, {exec_key}_attended,
-    # {exec_key}_calls_answered, {exec_key}_calls_unanswered
+    # SALES EXECUTIVES
+    # Make sure these columns exist in public.daily_visits:
+    # tejas_p_revisits, tejas_p_attended, tejas_p_calls_answered, tejas_p_calls_unanswered
+    # komal_k_revisits, komal_k_attended, komal_k_calls_answered, komal_k_calls_unanswered
+    # ashutosh_s_revisits, ashutosh_s_attended, ashutosh_s_calls_answered, ashutosh_s_calls_unanswered
+    # sailee_d_revisits, sailee_d_attended, sailee_d_calls_answered, sailee_d_calls_unanswered
+    # dhanashree_w_revisits, dhanashree_w_attended, dhanashree_w_calls_answered, dhanashree_w_calls_unanswered
     # ============================================================
     SALES_EXECUTIVES = [
         ("Tejas P", "tejas_p"),
@@ -21002,32 +21066,41 @@ with tab11:
 
     EXECUTIVES_PER_ROW = 4
 
-    st.caption(
-        "Enter source-wise visits and executive-wise performance. Month, day, totals, and updates are handled automatically."
-    )
-
     # ============================================================
-    # Single Form
+    # FORM
     # ============================================================
     with st.form("daily_visits_form_supabase", clear_on_submit=True):
         st.markdown("#### 🧾 Daily Visit Entry")
 
         top1, top2 = st.columns([1, 1])
-        d = top1.date_input("Date", value=datetime.date.today(), format="DD/MM/YYYY")
 
-        top2.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
-        top2.info("💡 Entry for the selected day will update if already present.")
+        with top1:
+            d = st.date_input(
+                "Date",
+                value=datetime.date.today(),
+                format="DD/MM/YYYY",
+                key="daily_visit_date_input"
+            )
+
+        with top2:
+            st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
+            st.info("💡 Entry for the selected day will update if already present.")
 
         st.markdown("<div class='section-title'>📍 Lead Sources</div>", unsafe_allow_html=True)
 
         s1, s2, s3 = st.columns(3)
-        cp_visits = s1.number_input("CP Visits", min_value=0, step=1, value=0)
-        walkin = s2.number_input("Direct Walk-in", min_value=0, step=1, value=0)
-        refs = s3.number_input("References", min_value=0, step=1, value=0)
+        with s1:
+            cp_visits = st.number_input("CP Visits", min_value=0, step=1, value=0)
+        with s2:
+            walkin = st.number_input("Direct Walk-in", min_value=0, step=1, value=0)
+        with s3:
+            refs = st.number_input("References", min_value=0, step=1, value=0)
 
         s4, s5 = st.columns(2)
-        digital = s4.number_input("Digital", min_value=0, step=1, value=0)
-        newspaper = s5.number_input("Newspaper", min_value=0, step=1, value=0)
+        with s4:
+            digital = st.number_input("Digital", min_value=0, step=1, value=0)
+        with s5:
+            newspaper = st.number_input("Newspaper", min_value=0, step=1, value=0)
 
         st.markdown("<div class='section-title'>👥 Sales Executive Wise</div>", unsafe_allow_html=True)
 
@@ -21036,9 +21109,6 @@ with tab11:
         calls_answered = {}
         calls_unanswered = {}
 
-        # ✅ FIXED:
-        # This creates executives in rows of 4.
-        # So 5th executive automatically moves to next row.
         for start in range(0, len(SALES_EXECUTIVES), EXECUTIVES_PER_ROW):
             chunk = SALES_EXECUTIVES[start:start + EXECUTIVES_PER_ROW]
             exec_cols = st.columns(len(chunk))
@@ -21053,7 +21123,7 @@ with tab11:
                             min_value=0,
                             step=1,
                             value=0,
-                            key=f"{exec_key}_revisits"
+                            key=f"dv_{exec_key}_revisits"
                         )
 
                         attended[exec_key] = st.number_input(
@@ -21061,7 +21131,7 @@ with tab11:
                             min_value=0,
                             step=1,
                             value=0,
-                            key=f"{exec_key}_attended"
+                            key=f"dv_{exec_key}_attended"
                         )
 
                         calls_answered[exec_key] = st.number_input(
@@ -21069,7 +21139,7 @@ with tab11:
                             min_value=0,
                             step=1,
                             value=0,
-                            key=f"{exec_key}_calls_answered"
+                            key=f"dv_{exec_key}_calls_answered"
                         )
 
                         calls_unanswered[exec_key] = st.number_input(
@@ -21077,7 +21147,7 @@ with tab11:
                             min_value=0,
                             step=1,
                             value=0,
-                            key=f"{exec_key}_calls_unanswered"
+                            key=f"dv_{exec_key}_calls_unanswered"
                         )
 
         revisit_total = int(sum(revisits.values()))
@@ -21094,8 +21164,10 @@ with tab11:
         st.markdown("<div class='section-title'>📈 Outcome</div>", unsafe_allow_html=True)
 
         o1, o2 = st.columns(2)
-        cancel = o1.number_input("Today’s Cancellation", min_value=0, step=1, value=0)
-        booking = o2.number_input("Today’s Booking", min_value=0, step=1, value=0)
+        with o1:
+            cancel = st.number_input("Today’s Cancellation", min_value=0, step=1, value=0)
+        with o2:
+            booking = st.number_input("Today’s Booking", min_value=0, step=1, value=0)
 
         st.markdown("<div class='section-title'>🎉 Festival (optional)</div>", unsafe_allow_html=True)
 
@@ -21108,7 +21180,6 @@ with tab11:
             festival_3 = festival_input_block("Festival 3", "festival3")
 
         fest_list = [x for x in [festival_1, festival_2, festival_3] if x]
-
         if len(set(map(str.lower, fest_list))) != len(fest_list):
             st.warning("⚠️ Same festival selected multiple times. It will be saved as-is.")
 
@@ -21121,12 +21192,12 @@ with tab11:
         submit = st.form_submit_button("✅ Submit Entry", type="primary", use_container_width=True)
 
     # ============================================================
-    # Submit handler
+    # SUBMIT HANDLER
     # ============================================================
     if submit:
         try:
             payload = {
-                "visit_date": _date_to_iso(d),
+                "visit_date": _date_to_sheet_text(d),
                 "month": _month_label(d),
                 "day": d.strftime("%A"),
 
@@ -21151,8 +21222,7 @@ with tab11:
                 "total_visits": int(total_visits),
             }
 
-            # Dynamic executive payload
-            # This avoids hard-coding every executive repeatedly.
+            # Add executive-wise fields dynamically
             for exec_name, exec_key in SALES_EXECUTIVES:
                 payload[f"{exec_key}_revisits"] = int(_to_int(revisits.get(exec_key, 0)))
                 payload[f"{exec_key}_attended"] = int(_to_int(attended.get(exec_key, 0)))
@@ -21166,20 +21236,34 @@ with tab11:
                 row_id = latest_row.get("id")
 
                 if row_id is None:
-                    st.error("❌ Existing row found, but id is missing. Cannot update.")
+                    st.error("❌ Existing row found, but ID is missing. Cannot update.")
                 else:
-                    _update_daily_visit(row_id, payload)
+                    updated_rows = _update_daily_visit(row_id, payload)
 
-                    if len(existing_rows) > 1:
-                        st.warning(
-                            f"⚠️ Multiple rows found for {d.strftime('%d/%m/%Y')}. "
-                            f"Updated latest row id: {row_id}."
+                    if updated_rows:
+                        st.success(
+                            f"✅ Updated successfully for {d.strftime('%d/%m/%Y')}. "
+                            f"Saved Date: {_date_to_sheet_text(d)} | Row ID: {row_id}"
                         )
-
-                    st.success("✅ Updated successfully.")
+                    else:
+                        st.error(
+                            "❌ Supabase returned no updated row. "
+                            "Please check table permissions and row ID."
+                        )
             else:
-                _insert_daily_visit(payload)
-                st.success("✅ Saved successfully.")
+                inserted_rows = _insert_daily_visit(payload)
+
+                if inserted_rows:
+                    new_id = inserted_rows[0].get("id", "new row")
+                    st.success(
+                        f"✅ Saved successfully for {d.strftime('%d/%m/%Y')}. "
+                        f"Saved Date: {_date_to_sheet_text(d)} | Row ID: {new_id}"
+                    )
+                else:
+                    st.error(
+                        "❌ Supabase returned no inserted row. "
+                        "Please check permissions and column names."
+                    )
 
             try:
                 st.cache_data.clear()
@@ -21190,17 +21274,19 @@ with tab11:
             st.error(f"❌ Error saving Daily Visits entry: {e}")
 
     # ============================================================
-    # Recent entries preview
+    # RECENT ENTRIES PREVIEW
     # ============================================================
     st.markdown("---")
     st.subheader("📋 Recent Daily Visit Entries")
 
-    recent_df = _load_recent_daily_visits(limit=10)
+    recent_df = _load_recent_daily_visits(limit=12)
 
     if recent_df.empty:
         st.info("No Daily Visits entries found yet.")
     else:
         preferred_cols = [
+            "id",
+            "created_at",
             "visit_date",
             "month",
             "day",
@@ -21218,7 +21304,6 @@ with tab11:
             "total_visits",
         ]
 
-        # Add executive columns dynamically to recent preview if present
         for exec_name, exec_key in SALES_EXECUTIVES:
             preferred_cols.extend([
                 f"{exec_key}_revisits",
@@ -21231,6 +21316,8 @@ with tab11:
         display_df = recent_df[show_cols].copy()
 
         rename_map = {
+            "id": "ID",
+            "created_at": "Created At",
             "visit_date": "Date",
             "month": "Month",
             "day": "Day",
