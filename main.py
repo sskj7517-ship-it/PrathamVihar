@@ -12429,6 +12429,32 @@ with tab2:
 
                 return (year, order, q)
 
+            def _calendar_quarter_key(qtxt):
+                s = str(qtxt).strip().lower()
+                m = re.search(r"(\d{4})", s)
+                year = int(m.group(1)) if m else 0
+
+                q_match = re.search(r"\bq\s*([1-4])\b", s)
+                if q_match:
+                    return (year, int(q_match.group(1)))
+
+                if re.search(r"\b(jan|january|feb|february|mar|march)\b", s):
+                    q = 1
+                elif re.search(r"\b(apr|april|may|jun|june)\b", s):
+                    q = 2
+                elif re.search(r"\b(jul|july|aug|august|sep|sept|september)\b", s):
+                    q = 3
+                elif re.search(r"\b(oct|october|nov|november|dec|december)\b", s):
+                    q = 4
+                else:
+                    q = 9
+
+                return (year, q)
+
+            def _use_no_psf_incentive(qtxt):
+                year, q = _calendar_quarter_key(qtxt)
+                return q in {1, 2, 3, 4} and (year, q) >= (2026, 2)
+
             quarter_options = sorted(
                 [
                     q for q in calc_df["Quarter"].dropna().unique().tolist()
@@ -12623,6 +12649,7 @@ with tab2:
                             return 0
 
                         exec_df["Per Unit Rate Applied"] = exec_df["Lead"].map(per_unit_rate)
+                        no_psf_incentive = _use_no_psf_incentive(active_quarter)
 
                         def wing_payout(row):
                             if row["PodiumFlag"]:
@@ -12638,8 +12665,10 @@ with tab2:
 
                             return old_global_payout_percent_from_rate(avg_rate)
 
-                        exec_df["Payout % Applied"] = exec_df.apply(wing_payout, axis=1)
-                        pod_pct = podium_payout_percent_from_rate(avg_rate_POD)
+                        if no_psf_incentive:
+                            exec_df["Payout % Applied"] = 1.0
+                        else:
+                            exec_df["Payout % Applied"] = exec_df.apply(wing_payout, axis=1)
 
                         exec_df["Per Unit Incentive"] = exec_df["Per Unit Rate Applied"] * exec_df["Payout % Applied"]
                         base_incentive_all = float(exec_df["Per Unit Incentive"].sum())
@@ -12699,9 +12728,9 @@ with tab2:
 
                         applicable_ratio_pct = 0 if unit_count == 0 else int((applicable_count / unit_count) * 100)
 
-                        ef_pct = ef_wing_payout_percent_from_rate(avg_rate_EF)
-                        c_pct = c_wing_payout_percent_from_rate(avg_rate_C)
-                        pod_pct = podium_payout_percent_from_rate(avg_rate_POD)
+                        ef_pct = float(exec_df.loc[mask_EF, "Payout % Applied"].mean()) if mask_EF.any() else 0.0
+                        c_pct = float(exec_df.loc[mask_C, "Payout % Applied"].mean()) if mask_C.any() else 0.0
+                        pod_pct = float(exec_df.loc[mask_POD, "Payout % Applied"].mean()) if mask_POD.any() else 0.0
 
                         ef_label = _pct_label(ef_pct)
                         c_label = _pct_label(c_pct)
@@ -13671,6 +13700,10 @@ with tab2:
                 def use_three_term_for(qtxt):
                     y, q = _parse_yq(qtxt)
                     return (y, q) >= (CUTOFF_YEAR, CUTOFF_Q)
+
+                def use_no_psf_incentive_for(qtxt):
+                    y, q = _parse_yq(qtxt)
+                    return q in {1, 2, 3, 4} and (y, q) >= (CUTOFF_YEAR, CUTOFF_Q)
     
                 # ============ Normalize base data ============
                 data = data.copy()
@@ -13834,10 +13867,16 @@ with tab2:
     
                             return q_df
     
-                        # ---------- Mode 2/3: PSF slabs ----------
+                        # ---------- Mode 2/3: Base rate + quarter payout ----------
                         dr, cr = per_unit_rate_from_count(len(q_df))
     
                         q_df["Per Unit Rate Applied"] = q_df["Lead"].map(lambda L: unit_rate_map(L, dr, cr))
+
+                        if use_no_psf_incentive_for(q):
+                            q_df["Payout % Applied"] = 1.0
+                            q_df["Per Unit Incentive"] = q_df["Per Unit Rate Applied"] * q_df["Payout % Applied"]
+    
+                            return q_df
     
                         # Averages
                         avg_all_np = avg_rate_subset(q_df[mask_np])
