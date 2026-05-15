@@ -12362,7 +12362,7 @@ with tab2:
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ------------------------------------------------------------------
+      # ------------------------------------------------------------------
     # SUBTAB 4 — INCENTIVE CALCULATOR
     # ------------------------------------------------------------------
     with ST_INCENTIVE:
@@ -14076,8 +14076,8 @@ with tab2:
                                 t3 = splits.apply(lambda t: t[2])
     
                                 ag_due = float(t1.loc[ag_mask].sum())
-                                rcc_due = float(t2.loc[rcc_mask].sum())
-                                pos_due = float(t3.loc[pos_mask].sum())
+                                rcc_due = float(t2.loc[ag_mask].sum())
+                                pos_due = float(t3.loc[ag_mask].sum())
                             else:
                                 ag_due = float(base_series.sum())
                                 rcc_due = 0.0
@@ -14181,8 +14181,8 @@ with tab2:
                                 t3 = splits.apply(lambda t: t[2])
     
                                 ag_due = float(t1.loc[sd_mask].sum())
-                                rcc_due = float(t2.loc[rcc_mask].sum())
-                                pos_due = float(t3.loc[pos_mask].sum())
+                                rcc_due = float(t2.loc[sd_mask].sum())
+                                pos_due = float(t3.loc[sd_mask].sum())
                             else:
                                 ag_due = float(base_series.sum())
                                 rcc_due = 0.0
