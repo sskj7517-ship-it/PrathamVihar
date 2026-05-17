@@ -12362,7 +12362,7 @@ with tab2:
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-      # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # SUBTAB 4 — INCENTIVE CALCULATOR
     # ------------------------------------------------------------------
     with ST_INCENTIVE:
@@ -14936,21 +14936,6 @@ with tab3:
 
             agreement_cost = float(st.session_state.agreement_cost)
 
-            # --- SLAB CALCULATIONS ---
-            booking_amount = round(agreement_cost * 0.05)
-            agreement = round(agreement_cost * 0.10)
-            plinth = round(agreement_cost * 0.15)
-            third_floor = round(agreement_cost * 0.075)
-            seventh_floor = round(agreement_cost * 0.075)
-            tenth_floor = round(agreement_cost * 0.075)
-            thirteenth_floor = round(agreement_cost * 0.075)
-            flooring = round(agreement_cost * 0.075)
-            plastering = round(agreement_cost * 0.075)
-            plumbing = round(agreement_cost * 0.075)
-            electrical = round(agreement_cost * 0.075)
-            sanitary_lift = round(agreement_cost * 0.05)
-            possession = round(agreement_cost * 0.05)
-
             parking_text = _parking_text()
 
             # Supabase row for public.bookings
@@ -14984,19 +14969,6 @@ with tab3:
                 "outsider_banker": None,
 
                 "carpet_area": float(st.session_state.get("booking_carpet_area_main")),
-                "booking_amount": booking_amount,
-                "agreement": agreement,
-                "plinth": plinth,
-                "third_floor": third_floor,
-                "seventh_floor": seventh_floor,
-                "tenth_floor": tenth_floor,
-                "thirteenth_floor": thirteenth_floor,
-                "flooring": flooring,
-                "plastering": plastering,
-                "plumbing": plumbing,
-                "electrical": electrical,
-                "sanitary_lift": sanitary_lift,
-                "possession": possession,
 
                 "first_visit_date": first_visit_date_obj.isoformat(),
                 "conversion_period_days": int(_days_gap),
@@ -15017,7 +14989,7 @@ with tab3:
             except Exception:
                 pass
 
-            st.success("🎉 Booking, Conversion Period, Slabs & Remarks submitted successfully to Supabase!")
+            st.success("🎉 Booking, Conversion Period & Remarks submitted successfully to Supabase!")
 
             # ---- Reset ----
             _reset_booking_form_state()
@@ -24757,14 +24729,71 @@ with tab13:
     # ============================================================
     # SUBTABS
     # ============================================================
-    cf_subtab1, cf_subtab2, cf_subtab3 = st.tabs(
-        ["Cashflow Dashboard", "Cashflow Slab Master", "Due Table"]
+    cf_receipt_tab, cf_dashboard_tab, cf_master_tab, cf_due_tab = st.tabs(
+        ["Receipt Punching", "Cashflow Dashboard", "Cashflow Slab Master", "Due Table"]
     )
 
     # ============================================================
-    # SUBTAB 1: DASHBOARD
+    # SUBTAB 1: RECEIPT PUNCHING
     # ============================================================
-    with cf_subtab1:
+    with cf_receipt_tab:
+        st.markdown("<div class='section-subtitle'>🧾 Receipt Punching</div>", unsafe_allow_html=True)
+
+        receipt_success_msg = st.session_state.pop("cashflow_receipt_success_msg", "")
+        if receipt_success_msg:
+            st.success(receipt_success_msg)
+
+        if not live_booking_df.empty:
+            form_df = live_booking_df.copy()
+            form_df["_label_"] = form_df.apply(_customer_option_label, axis=1)
+            form_options = form_df["_label_"].tolist()
+
+            if "cashflow_detail_customer" not in st.session_state and form_options:
+                st.session_state["cashflow_detail_customer"] = form_options[0]
+
+            with st.form("cashflow_receipt_form", clear_on_submit=True):
+                form_customer = st.selectbox("Select Customer", options=form_options, key="cashflow_form_customer")
+                form_amount = st.number_input(
+                    "Received Amount",
+                    min_value=0.0,
+                    value=0.0,
+                    step=1000.0,
+                    key="cashflow_form_amount"
+                )
+
+                submitted = st.form_submit_button("Add Receipt")
+
+                if submitted:
+                    if not form_customer:
+                        st.error("Please select a customer.")
+                    elif form_amount <= 0:
+                        st.error("Please enter amount greater than 0.")
+                    else:
+                        sel_idx = form_df.index[form_df["_label_"] == form_customer][0]
+
+                        current_received = _to_num(live_booking_df.at[sel_idx, "Received Amount"])
+                        new_received_amount = round(current_received + _to_num(form_amount), 2)
+                        row_id = live_booking_df.at[sel_idx, "id"] if "id" in live_booking_df.columns else None
+
+                        ok, err = _update_booking_received_amount(row_id, new_received_amount)
+
+                        if ok:
+                            st.session_state["cashflow_detail_customer"] = form_customer
+                            st.session_state["cashflow_receipt_success_msg"] = (
+                                f"Received Amount updated from {_fmt_money(current_received)} "
+                                f"to {_fmt_money(new_received_amount)}."
+                            )
+                            st.rerun()
+                        else:
+                            st.error(f"Could not update Supabase bookings table: {err}")
+
+        else:
+            st.info("No bookings found in Supabase table `bookings`.")
+
+    # ============================================================
+    # SUBTAB 2: DASHBOARD
+    # ============================================================
+    with cf_dashboard_tab:
         total_collection_all = wing_summary_df["Collection Till Date"].sum() if not wing_summary_df.empty else 0.0
         total_received_all = wing_summary_df["Received Till Date"].sum() if not wing_summary_df.empty else 0.0
         total_due_all = max(total_collection_all - total_received_all, 0.0)
@@ -24794,55 +24823,6 @@ with tab13:
                     _cf_card(f"{wr['Wing']} — Due Till Date", _fmt_money(wr["Due Till Date"]), "cf-amber", f"{_to_num(wr['Due %']):.1f}%")
                 with c4:
                     _cf_card(f"{wr['Wing']} — Status", wr["Status"], "cf-neutral")
-
-        st.markdown("<div class='section-subtitle'>🧾 Receipt Punching</div>", unsafe_allow_html=True)
-
-        if not live_booking_df.empty:
-            form_df = live_booking_df.copy()
-            form_df["_label_"] = form_df.apply(_customer_option_label, axis=1)
-            form_options = form_df["_label_"].tolist()
-
-            if "cashflow_detail_customer" not in st.session_state and form_options:
-                st.session_state["cashflow_detail_customer"] = form_options[0]
-
-            with st.form("cashflow_receipt_form"):
-                form_customer = st.selectbox("Select Customer", options=form_options, key="cashflow_form_customer")
-                form_amount = st.number_input(
-                    "Enter New Received Amount (Gross / slab demand is GST-inclusive)",
-                    min_value=0.0,
-                    value=0.0,
-                    step=1000.0,
-                    key="cashflow_form_amount"
-                )
-
-                if form_customer:
-                    st.caption("Every slab amount is calculated on Agreement Cost + GST. Normal payment schedule only.")
-
-                submitted = st.form_submit_button("Add Receipt")
-
-                if submitted:
-                    if not form_customer:
-                        st.error("Please select a customer.")
-                    elif form_amount <= 0:
-                        st.error("Please enter amount greater than 0.")
-                    else:
-                        sel_idx = form_df.index[form_df["_label_"] == form_customer][0]
-
-                        current_received = _to_num(live_booking_df.at[sel_idx, "Received Amount"])
-                        new_received_amount = round(current_received + _to_num(form_amount), 2)
-                        row_id = live_booking_df.at[sel_idx, "id"] if "id" in live_booking_df.columns else None
-
-                        ok, err = _update_booking_received_amount(row_id, new_received_amount)
-
-                        if ok:
-                            st.session_state["cashflow_detail_customer"] = form_customer
-                            st.success("Received Amount updated successfully in Supabase bookings table.")
-                            st.rerun()
-                        else:
-                            st.error(f"Could not update Supabase bookings table: {err}")
-
-        else:
-            st.info("No bookings found in Supabase table `bookings`.")
 
         st.markdown("<div class='section-subtitle'>👤 Customer-wise Details</div>", unsafe_allow_html=True)
 
@@ -24951,9 +24931,9 @@ with tab13:
             )
 
     # ============================================================
-    # SUBTAB 2: CASHFLOW SLAB MASTER
+    # SUBTAB 3: CASHFLOW SLAB MASTER
     # ============================================================
-    with cf_subtab2:
+    with cf_master_tab:
         st.markdown("<div class='section-subtitle'>📄 Cashflow Slab Master</div>", unsafe_allow_html=True)
         st.info("This reads and updates Supabase table `cashflow_slab_master`.")
 
@@ -25032,9 +25012,9 @@ with tab13:
                 st.dataframe(fresh_master_df, use_container_width=True, hide_index=True)
 
     # ============================================================
-    # SUBTAB 3: DUE TABLE
+    # SUBTAB 4: DUE TABLE
     # ============================================================
-    with cf_subtab3:
+    with cf_due_tab:
         st.markdown("<div class='section-subtitle'>🏢 Due Table</div>", unsafe_allow_html=True)
         st.caption("Flat-wise due view. Booked flats show customer name, due amount, due %, and received %. MHADA and Landowner units do not carry any due logic.")
 
