@@ -9,6 +9,8 @@ TABLES = {
     "daily_visits_df": "daily_visits",
     "cashflow_slab_master_df": "cashflow_slab_master",
     "sales_targets_df": "sales_targets",
+    "construction_floor_progress_df": "construction_floor_progress",
+    "construction_flat_progress_df": "construction_flat_progress",
 }
 
 
