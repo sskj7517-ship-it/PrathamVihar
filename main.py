@@ -337,7 +337,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # Create tabs - same sequence as old app
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16 = st.tabs([
     "**Dashboard**",
     "**Calculators**",
     "**Booking Punch**",
@@ -350,6 +350,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13
     "**Pratham Vihar AI**",
     "**Daily Visits**",
     "**Inventory Status**",
+    "**Construction Progress**",
     "**CashFlow**",
     "**Sales Target**",
     "**Site Summary**",
@@ -23413,13 +23414,31 @@ with tab12:
         _render_inventory_details_table(details_df)
 
 # ============================================================
-# TAB 16 — CASHFLOW / SUPABASE VERSION
+# TAB 13 — CONSTRUCTION PROGRESS TRACKING
+# Uses:
+#   construction_floor_progress
+#   construction_flat_progress
+# ============================================================
+
+with tab13:
+    from construction_progress_tab import render_construction_progress_tab
+
+    supabase_client = globals().get("supabase", None) or globals().get("supabase_client", None)
+
+    if supabase_client is None:
+        st.warning("Supabase client is not initialized.")
+        st.stop()
+
+    render_construction_progress_tab(supabase_client)
+
+# ============================================================
+# TAB 14 — CASHFLOW / SUPABASE VERSION
 # Uses:
 #   bookings
 #   cashflow_slab_master
 # ============================================================
 
-with tab13:
+with tab14:
     import datetime
     from html import escape
 
@@ -25077,7 +25096,7 @@ with tab13:
                 })
 
                 st.dataframe(wing_due_df, use_container_width=True, height=460)
-with tab14:
+with tab15:
     import re
     import datetime
     import pandas as pd
@@ -25576,7 +25595,7 @@ with tab14:
         )
 
         st.altair_chart(bar + labels, use_container_width=True)
-with tab15:
+with tab16:
     import re
     import io
     import ssl
