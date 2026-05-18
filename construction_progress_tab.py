@@ -4,6 +4,7 @@ from html import escape
 from urllib.parse import quote
 
 import pandas as pd
+import altair as alt
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -395,6 +396,111 @@ def _row_progress(row, cols):
     return done, total, _pct(done, total)
 
 
+def _rows_progress(rows, cols):
+    if rows is None or rows.empty:
+        return 0, 0, 0.0
+    total = len(rows) * len(cols)
+    done = 0
+    for _, row in rows.iterrows():
+        done += sum(1 for col in cols if _is_done(row, col))
+    return done, total, _pct(done, total)
+
+
+def _parse_done_dates(row, cols):
+    dates = []
+    for col in cols:
+        val = _safe_str(row.get(col, ""))
+        if not val:
+            continue
+        parsed = pd.to_datetime(val, errors="coerce")
+        if pd.notna(parsed):
+            dates.append(parsed.normalize())
+    return dates
+
+
+def _level_date_summary(floor_df, flat_df, wing, level):
+    dates = []
+    floor_row = _floor_row(floor_df, wing, level["level_code"])
+    if not floor_row.empty:
+        dates.extend(_parse_done_dates(floor_row, FLOOR_DATE_COLS))
+
+    floor_no = level.get("floor_no")
+    if floor_no and int(floor_no) >= 1:
+        rows = _flat_rows(flat_df, wing, floor_no)
+        for _, row in rows.iterrows():
+            dates.extend(_parse_done_dates(row, FLAT_DATE_COLS))
+
+    if not dates:
+        return "", "", 0
+
+    first = min(dates)
+    latest = max(dates)
+    return first.date().isoformat(), latest.date().isoformat(), int((latest - first).days)
+
+
+def _work_progress_for_wing(floor_df, flat_df, wing, work):
+    if work["scope"] == "floor":
+        rows = floor_df[floor_df["wing"] == wing].copy()
+        return _rows_progress(rows, _work_columns(work))
+
+    rows = flat_df[flat_df["wing"] == wing].copy()
+    return _rows_progress(rows, _work_columns(work))
+
+
+def _wing_overall_progress(floor_df, flat_df, wing):
+    floor_rows = floor_df[floor_df["wing"] == wing].copy()
+    flat_rows = flat_df[flat_df["wing"] == wing].copy()
+
+    floor_done, floor_total, _ = _rows_progress(floor_rows, FLOOR_DATE_COLS)
+    flat_done, flat_total, _ = _rows_progress(flat_rows, FLAT_DATE_COLS)
+    return floor_done + flat_done, floor_total + flat_total, _pct(floor_done + flat_done, floor_total + flat_total)
+
+
+def _dashboard_wing_rows(floor_df, flat_df):
+    rows = []
+    for wing in WINGS:
+        done, total, pct = _wing_overall_progress(floor_df, flat_df, wing)
+        rows.append({
+            "Wing": wing,
+            "Done": done,
+            "Total": total,
+            "Progress %": pct,
+        })
+    return pd.DataFrame(rows)
+
+
+def _dashboard_work_rows(floor_df, flat_df, wing):
+    rows = []
+    for work in WORKS:
+        done, total, pct = _work_progress_for_wing(floor_df, flat_df, wing, work)
+        rows.append({
+            "Main Work": work["main"],
+            "Done": done,
+            "Total": total,
+            "Progress %": pct,
+        })
+    return pd.DataFrame(rows)
+
+
+def _dashboard_level_rows(floor_df, flat_df, wing):
+    rows = []
+    for level in FLOOR_LEVELS_TOP_DOWN:
+        report_rows = _level_report_rows(floor_df, flat_df, wing, level)
+        total = sum(int(r["Total"]) for r in report_rows)
+        done = sum(int(r["Done"]) for r in report_rows)
+        first_date, latest_date, duration_days = _level_date_summary(floor_df, flat_df, wing, level)
+        rows.append({
+            "Level": level["level_label"],
+            "Done": done,
+            "Total": total,
+            "Progress %": _pct(done, total),
+            "First Date": first_date,
+            "Latest Date": latest_date,
+            "Duration Days": duration_days,
+        })
+    return pd.DataFrame(rows)
+
+
 def _floor_row(floor_df, wing, level_code):
     sub = floor_df[(floor_df["wing"] == wing) & (floor_df["level_code"] == level_code)]
     if sub.empty:
@@ -516,7 +622,9 @@ def _widget_css():
     .cp-tab{border:1px solid #cbd5e1;background:#f8fafc;color:#0f172a;border-radius:999px;padding:7px 12px;font-weight:900;cursor:pointer}
     .cp-tab.active{background:#0f172a;color:#fff;border-color:#0f172a}
     .cp-panel{display:none}.cp-panel.active{display:block}
-    .cp-building-row{display:grid;grid-template-columns:110px 1fr 70px;gap:10px;align-items:center;border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin-bottom:7px;cursor:pointer;background:#f8fafc}
+    .cp-building-core{max-width:920px;margin:0 auto;background:linear-gradient(90deg,#e2e8f0 0,#f8fafc 8%,#fff 50%,#f8fafc 92%,#e2e8f0 100%);border:4px solid #94a3b8;border-radius:14px;padding:10px 12px 14px;box-shadow:0 18px 40px rgba(15,23,42,.12)}
+    .cp-building-roof{height:18px;background:#475569;border-radius:12px 12px 4px 4px;margin:0 auto 8px;max-width:760px}
+    .cp-building-row{display:grid;grid-template-columns:110px 1fr 70px;gap:10px;align-items:center;border:1px solid #cbd5e1;border-radius:4px;padding:8px;margin-bottom:5px;cursor:pointer;background:#f8fafc;box-shadow:inset 0 0 0 1px rgba(255,255,255,.55)}
     .cp-building-row:hover,.cp-cell:hover{outline:3px solid rgba(37,99,235,.18)}
     .cp-level{font-size:13px;font-weight:900}.cp-bar{height:18px;background:#e5e7eb;border-radius:999px;overflow:hidden}.cp-bar span{display:block;height:100%;border-radius:999px}.cp-pct{text-align:right;font-weight:900;font-size:13px}
     .cp-flat-grid{display:grid;grid-template-columns:72px repeat(11,minmax(68px,1fr));gap:6px;min-width:980px}
@@ -577,7 +685,11 @@ def _build_floor_widget(floor_df, flat_df):
                 f"<div class='cp-bar'><span style='width:{pct:.1f}%'></span></div>"
                 f"<div class='cp-pct'>{pct:.1f}%</div></div>"
             )
-        panels.append(f"<div id='{panel_id}' class='cp-panel cpfloor-panel {'active' if idx == 0 else ''}'>{''.join(level_rows)}</div>")
+        panels.append(
+            f"<div id='{panel_id}' class='cp-panel cpfloor-panel {'active' if idx == 0 else ''}'>"
+            f"<div class='cp-building-core'><div class='cp-building-roof'></div>{''.join(level_rows)}</div>"
+            "</div>"
+        )
     return f"""
     {_widget_css()}
     <div class="cp-shell" id="cpFloorWidget">
@@ -693,76 +805,118 @@ def render_construction_progress_tab(supabase_client):
     with c3:
         _card("Flat Work Progress", _fmt_pct(_pct(flat_done, flat_total)), f"{flat_done:,}/{flat_total:,}")
 
-    update_tab, floor_tab, flat_tab = st.tabs(["Update Progress", "Floor-wise Progress", "Flat-wise Progress"])
+    dashboard_tab, slab_update_tab, flat_update_tab, floor_tab, flat_tab = st.tabs([
+        "Dashboard",
+        "Update Slab / RCC",
+        "Update Flat Work",
+        "Floor-wise Progress",
+        "Flat-wise Progress",
+    ])
 
-    with update_tab:
-        st.markdown("<div class='cp-section-title'>Update Checkpoints</div>", unsafe_allow_html=True)
+    with dashboard_tab:
+        st.markdown("<div class='cp-section-title'>Dashboard</div>", unsafe_allow_html=True)
 
-        selected_wing = st.selectbox("Wing", WINGS, key="cp_update_wing")
-        selected_work_name = st.selectbox("Main Work", [w["main"] for w in WORKS], key="cp_update_work")
-        selected_work = WORK_BY_NAME[selected_work_name]
+        total_done = floor_done + flat_done
+        total_possible = floor_total + flat_total
+        wing_rows = _dashboard_wing_rows(floor_df, flat_df)
 
-        if len(selected_work["sections"]) > 1:
-            selected_section = st.selectbox("Header / Section", list(selected_work["sections"].keys()), key="cp_update_section")
-        else:
-            selected_section = list(selected_work["sections"].keys())[0]
+        dash_wing = st.selectbox("Select Wing", WINGS, key="cp_dash_wing")
+        selected_wing_row = wing_rows[wing_rows["Wing"] == dash_wing].iloc[0]
+        level_rows = _dashboard_level_rows(floor_df, flat_df, dash_wing)
+        work_rows = _dashboard_work_rows(floor_df, flat_df, dash_wing)
 
-        if selected_work["scope"] == "floor":
-            level_labels = [l["level_label"] for l in FLOOR_LEVELS]
-            selected_level_label = st.selectbox("Slab / Level", level_labels, key="cp_update_level")
-            selected_level = next(l for l in FLOOR_LEVELS if l["level_label"] == selected_level_label)
-            row_df = floor_df[(floor_df["wing"] == selected_wing) & (floor_df["level_code"] == selected_level["level_code"])]
-            table_name = FLOOR_TABLE
-            row_label = selected_level_label
-        else:
-            selected_floor = st.selectbox("Floor", list(range(1, 14)), key="cp_update_floor")
-            options_df = _flat_rows(flat_df, selected_wing, selected_floor).sort_values("display_order")
-            option_labels = [
-                f"{r['flat_number']} - {r['unit_type']}"
-                for _, r in options_df.iterrows()
-            ]
-            selected_label = st.selectbox("Flat / Area", option_labels, key="cp_update_flat")
-            selected_idx = option_labels.index(selected_label)
-            selected_row_id = options_df.iloc[selected_idx]["id"]
-            row_df = flat_df[flat_df["id"] == selected_row_id]
-            table_name = FLAT_TABLE
-            row_label = selected_label
+        duration_rows = level_rows[level_rows["Duration Days"] > 0].copy()
+        avg_duration = float(duration_rows["Duration Days"].mean()) if not duration_rows.empty else 0.0
+        max_duration = int(duration_rows["Duration Days"].max()) if not duration_rows.empty else 0
 
+        d1, d2, d3, d4 = st.columns(4)
+        with d1:
+            _card("Overall Progress", _fmt_pct(_pct(total_done, total_possible)), f"{total_done:,}/{total_possible:,}")
+        with d2:
+            _card(f"{dash_wing} Progress", _fmt_pct(selected_wing_row["Progress %"]), f"{int(selected_wing_row['Done']):,}/{int(selected_wing_row['Total']):,}")
+        with d3:
+            _card("Avg Level Duration", f"{avg_duration:.1f} days", "First to latest completed checkpoint")
+        with d4:
+            _card("Max Level Duration", f"{max_duration} days", "Longest floor-wise date gap")
+
+        st.markdown("<div class='cp-section-title'>Wing Progress</div>", unsafe_allow_html=True)
+        wing_chart = alt.Chart(wing_rows).mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5).encode(
+            x=alt.X("Wing:N", title="Wing", sort=WINGS),
+            y=alt.Y("Progress %:Q", title="Progress %", scale=alt.Scale(domain=[0, 100])),
+            color=alt.Color("Progress %:Q", scale=alt.Scale(scheme="tealblues"), legend=None),
+            tooltip=["Wing:N", alt.Tooltip("Progress %:Q", format=".1f"), "Done:Q", "Total:Q"],
+        ).properties(height=300)
+        st.altair_chart(wing_chart, use_container_width=True)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("<div class='cp-section-title'>Main Work Progress</div>", unsafe_allow_html=True)
+            work_chart = alt.Chart(work_rows).mark_bar(cornerRadiusTopLeft=5, cornerRadiusBottomLeft=5).encode(
+                y=alt.Y("Main Work:N", title=None, sort="-x"),
+                x=alt.X("Progress %:Q", title="Progress %", scale=alt.Scale(domain=[0, 100])),
+                color=alt.Color("Progress %:Q", scale=alt.Scale(scheme="greens"), legend=None),
+                tooltip=["Main Work:N", alt.Tooltip("Progress %:Q", format=".1f"), "Done:Q", "Total:Q"],
+            ).properties(height=390)
+            st.altair_chart(work_chart, use_container_width=True)
+
+        with c2:
+            st.markdown("<div class='cp-section-title'>Floor-wise Days Difference</div>", unsafe_allow_html=True)
+            duration_chart = alt.Chart(level_rows).mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5).encode(
+                x=alt.X("Level:N", title="Level", sort=level_rows["Level"].tolist(), axis=alt.Axis(labelAngle=-45)),
+                y=alt.Y("Duration Days:Q", title="Days"),
+                color=alt.Color("Duration Days:Q", scale=alt.Scale(scheme="oranges"), legend=None),
+                tooltip=["Level:N", "First Date:N", "Latest Date:N", "Duration Days:Q"],
+            ).properties(height=390)
+            st.altair_chart(duration_chart, use_container_width=True)
+
+        st.markdown("<div class='cp-section-title'>Floor-wise Progress Table</div>", unsafe_allow_html=True)
+        display_level = level_rows.copy()
+        display_level["Progress %"] = display_level["Progress %"].map(lambda x: round(float(x), 1))
+        st.dataframe(display_level, use_container_width=True, hide_index=True)
+
+    with slab_update_tab:
+        st.markdown("<div class='cp-section-title'>Update Slab / RCC Checkpoints</div>", unsafe_allow_html=True)
+
+        selected_wing = st.selectbox("Wing", WINGS, key="cp_slab_update_wing")
+        level_labels = [l["level_label"] for l in FLOOR_LEVELS]
+        selected_level_label = st.selectbox("Slab / Level", level_labels, key="cp_slab_update_level")
+        selected_level = next(l for l in FLOOR_LEVELS if l["level_label"] == selected_level_label)
+
+        row_df = floor_df[(floor_df["wing"] == selected_wing) & (floor_df["level_code"] == selected_level["level_code"])]
         if row_df.empty:
-            st.error("Selected row was not found in Supabase.")
+            st.error("Selected slab row was not found in Supabase.")
             return
 
         row = row_df.iloc[0]
         row_id = row["id"]
-        checkpoints = selected_work["sections"][selected_section]
-        done_count = sum(1 for _, col in checkpoints if _is_done(row, col))
-        _card("Selected Progress", _fmt_pct(_pct(done_count, len(checkpoints))), f"{done_count}/{len(checkpoints)} checkpoints | {row_label}")
+        done_count, total_count, selected_pct = _row_progress(row, FLOOR_DATE_COLS)
+        _card("Selected RCC Progress", _fmt_pct(selected_pct), f"{done_count}/{total_count} checkpoints | {selected_wing} - {selected_level_label}")
 
         selected_date = st.date_input(
             "Completion date for newly checked items",
             value=datetime.date.today(),
             format="DD/MM/YYYY",
-            key="cp_update_date",
+            key="cp_slab_update_date",
         )
 
-        with st.form("construction_progress_update_form"):
-            st.caption("Checked checkpoint columns store a completion date. Unchecking clears that checkpoint date.")
+        with st.form("construction_slab_progress_form", clear_on_submit=False):
+            st.caption("Checked RCC checkpoint columns store a completion date. Unchecking clears that checkpoint date.")
             checkbox_values = {}
-            for label, col in checkpoints:
+            for label, col in RCC_CHECKPOINTS:
                 existing_date = _done_date(row, col)
                 display_label = f"{label} - {existing_date}" if existing_date else label
                 checkbox_values[col] = st.checkbox(
                     display_label,
                     value=bool(existing_date),
-                    key=f"cp_{table_name}_{row_id}_{col}",
+                    key=f"cp_slab_{row_id}_{col}",
                 )
 
-            submitted = st.form_submit_button("Save Progress", use_container_width=True)
+            submitted = st.form_submit_button("Save Slab / RCC Progress", use_container_width=True)
 
         if submitted:
             updates = {}
             done_date = _date_iso(selected_date)
-            for _, col in checkpoints:
+            for _, col in RCC_CHECKPOINTS:
                 currently_done = _is_done(row, col)
                 should_be_done = bool(checkbox_values[col])
                 if should_be_done and not currently_done:
@@ -771,23 +925,100 @@ def render_construction_progress_tab(supabase_client):
                     updates[col] = None
 
             if not updates:
-                st.info("No checkpoint changes to save.")
+                st.info("No RCC checkpoint changes to save.")
             else:
                 try:
-                    supabase_client.table(table_name).update(updates).eq("id", row_id).execute()
-                    st.success(f"Updated {len(updates)} checkpoint column(s).")
+                    supabase_client.table(FLOOR_TABLE).update(updates).eq("id", row_id).execute()
+                    st.success(f"Updated {len(updates)} RCC checkpoint column(s).")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Could not save construction progress: {e}")
+                    st.error(f"Could not save RCC progress: {e}")
 
-        with st.expander("Show selected row dates", expanded=False):
-            show_cols = ["wing"]
-            if table_name == FLOOR_TABLE:
-                show_cols += ["level_label"]
+        with st.expander("Show selected slab row dates", expanded=False):
+            st.dataframe(row_df[["wing", "level_label"] + FLOOR_DATE_COLS], use_container_width=True, hide_index=True)
+
+    with flat_update_tab:
+        st.markdown("<div class='cp-section-title'>Update Flat-wise Detailed Checkpoints</div>", unsafe_allow_html=True)
+
+        selected_wing = st.selectbox("Wing", WINGS, key="cp_flat_update_wing")
+        selected_floor = st.selectbox("Floor", list(range(1, 14)), key="cp_flat_update_floor")
+        options_df = _flat_rows(flat_df, selected_wing, selected_floor).sort_values("display_order")
+
+        if options_df.empty:
+            st.error("No flat rows found for this wing and floor.")
+            return
+
+        option_labels = [
+            f"{r['flat_number']} - {r['unit_type']}"
+            for _, r in options_df.iterrows()
+        ]
+        selected_label = st.selectbox("Flat / Area", option_labels, key="cp_flat_update_flat")
+        selected_idx = option_labels.index(selected_label)
+        selected_row_id = options_df.iloc[selected_idx]["id"]
+        row_df = flat_df[flat_df["id"] == selected_row_id]
+
+        if row_df.empty:
+            st.error("Selected flat row was not found in Supabase.")
+            return
+
+        row = row_df.iloc[0]
+        row_id = row["id"]
+        done_count, total_count, selected_pct = _row_progress(row, FLAT_DATE_COLS)
+        _card("Selected Flat Progress", _fmt_pct(selected_pct), f"{done_count}/{total_count} checkpoints | {selected_label}")
+
+        selected_date = st.date_input(
+            "Completion date for newly checked items",
+            value=datetime.date.today(),
+            format="DD/MM/YYYY",
+            key="cp_flat_update_date",
+        )
+
+        with st.form("construction_flat_progress_form", clear_on_submit=False):
+            st.caption("Every detailed checkpoint for the selected flat is shown below. Toilet and terrace sections are separated.")
+            checkbox_values = {}
+
+            for work in FLAT_WORKS:
+                st.markdown(f"### {work['main']}")
+                for section, checkpoints in work["sections"].items():
+                    if section != "General":
+                        st.markdown(f"**{section}**")
+
+                    for label, col in checkpoints:
+                        existing_date = _done_date(row, col)
+                        display_label = f"{label} - {existing_date}" if existing_date else label
+                        checkbox_values[col] = st.checkbox(
+                            display_label,
+                            value=bool(existing_date),
+                            key=f"cp_flat_{row_id}_{col}",
+                        )
+
+                st.markdown("---")
+
+            submitted = st.form_submit_button("Save Flat Progress", use_container_width=True)
+
+        if submitted:
+            updates = {}
+            done_date = _date_iso(selected_date)
+            for col in FLAT_DATE_COLS:
+                currently_done = _is_done(row, col)
+                should_be_done = bool(checkbox_values.get(col, False))
+                if should_be_done and not currently_done:
+                    updates[col] = done_date
+                elif (not should_be_done) and currently_done:
+                    updates[col] = None
+
+            if not updates:
+                st.info("No flat checkpoint changes to save.")
             else:
-                show_cols += ["floor_no", "flat_number", "unit_type"]
-            show_cols += [col for _, col in checkpoints]
-            st.dataframe(row_df[show_cols], use_container_width=True, hide_index=True)
+                try:
+                    supabase_client.table(FLAT_TABLE).update(updates).eq("id", row_id).execute()
+                    st.success(f"Updated {len(updates)} flat checkpoint column(s).")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not save flat progress: {e}")
+
+        with st.expander("Show selected flat row dates", expanded=False):
+            st.dataframe(row_df[["wing", "floor_no", "flat_number", "unit_type"] + FLAT_DATE_COLS], use_container_width=True, hide_index=True)
 
     with floor_tab:
         st.markdown("<div class='cp-section-title'>Floor-wise Building View</div>", unsafe_allow_html=True)
