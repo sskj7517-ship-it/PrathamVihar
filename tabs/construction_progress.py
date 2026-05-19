@@ -54,6 +54,10 @@ def _prefixed_cp(heading: str, section: str, prefix: str, label: str, consumptio
 
 
 RCC_CHECKPOINTS = [
+    _cp("RCC Work", "RCC Work", "Excavation", "excavation"),
+    _cp("RCC Work", "RCC Work", "PCC", "pcc"),
+    _cp("RCC Work", "RCC Work", "Raft", "raft"),
+    _cp("RCC Work", "RCC Work", "Footing", "footing"),
     _cp("RCC Work", "RCC Work", "Line out & wooden thesi", "lineout_wooden_thesi", ["line_out_wooden_thesi", "line_out_and_wooden_thesi"]),
     _cp("RCC Work", "RCC Work", "Column Steel Checking", "column_steel_checking", ["column_steel_binding_work", "columns_distribution_stirrups"]),
     _cp("RCC Work", "RCC Work", "Beams Reinforcement work", "beams_reinforcement_work"),
@@ -224,7 +228,8 @@ FLAT_CHECKPOINT_GROUPS = {
 
 FLAT_CHECKPOINTS = [cp for checkpoints in FLAT_CHECKPOINT_GROUPS.values() for cp in checkpoints]
 ALL_WORK_HEADINGS = ["RCC Work"] + list(FLAT_CHECKPOINT_GROUPS.keys())
-PARKING_RCC_SKIP_WORDS = ("aluform", "cover_blocks", "electrical", "sunksides", "sunk_sides")
+FOUNDATION_RCC_SLUGS = {"excavation", "pcc", "raft", "footing"}
+PARKING_RCC_SKIP_SLUGS = {"sunksides_for_toilet_terrace", "cover_blocks_as_per_requirement"}
 
 
 def _norm_col(name: str) -> str:
@@ -348,7 +353,40 @@ def _is_done(value) -> bool:
 def _parse_date(value):
     if not _is_done(value):
         return pd.NaT
-    return pd.to_datetime(value, errors="coerce", dayfirst=True)
+
+    if isinstance(value, pd.Timestamp):
+        return value.normalize()
+
+    if isinstance(value, (_dt.datetime, _dt.date)):
+        return pd.Timestamp(value).normalize()
+
+    s = str(value).strip()
+
+    # Supabase date columns are ISO-like. Parse these explicitly so
+    # 2026-03-05 stays 05-Mar-2026 and never becomes 03-May-2026.
+    if re.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$", s):
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                return pd.Timestamp(_dt.datetime.strptime(s, fmt)).normalize()
+            except Exception:
+                pass
+
+    for fmt in (
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d/%m/%y",
+        "%d-%m-%y",
+        "%d-%b-%Y",
+        "%d %b %Y",
+        "%d-%B-%Y",
+        "%d %B %Y",
+    ):
+        try:
+            return pd.Timestamp(_dt.datetime.strptime(s.title(), fmt)).normalize()
+        except Exception:
+            pass
+
+    return pd.to_datetime(value, errors="coerce")
 
 
 def _date_label(value) -> str:
@@ -389,6 +427,8 @@ def _level_label(row) -> str:
     floor_no = row.get("floor_no", row.get("Floor", ""))
     try:
         floor_i = int(float(floor_no))
+        if floor_i == -2:
+            return "Pre-RCC / Foundation"
         if floor_i == -1:
             return "Basement"
         if floor_i == 0:
@@ -435,8 +475,24 @@ def _is_parking_level(row) -> bool:
     return (
         label in {"basement", "ground", "stilt", "ground / stilt"}
         or code in {"basement", "ground", "stilt"}
-        or (floor_no is not None and floor_no <= 0)
+        or (floor_no is not None and floor_no in {-1, 0})
     )
+
+
+def _is_pre_rcc_level(row) -> bool:
+    label = _level_label(row).strip().lower()
+    code = _level_code(row).strip().lower()
+    floor_no = _floor_no(row)
+
+    return (
+        label in {"pre-rcc", "pre rcc", "foundation", "pre-rcc / foundation", "pre rcc / foundation"}
+        or code in {"pre_rcc", "foundation", "pre_rcc_foundation"}
+        or floor_no == -2
+    )
+
+
+def _is_structure_only_level(row) -> bool:
+    return _is_parking_level(row) or _is_pre_rcc_level(row)
 
 
 def _is_ground_or_stilt_level(row) -> bool:
@@ -452,15 +508,20 @@ def _is_ground_or_stilt_level(row) -> bool:
 
 
 def _active_rcc_checkpoints(row) -> list[Checkpoint]:
+    if _is_pre_rcc_level(row):
+        return [cp for cp in RCC_CHECKPOINTS if cp.slug in FOUNDATION_RCC_SLUGS]
+
     if not _is_parking_level(row):
-        return [cp for cp in RCC_CHECKPOINTS if cp.slug != "podium"]
+        return [cp for cp in RCC_CHECKPOINTS if cp.slug not in FOUNDATION_RCC_SLUGS and cp.slug != "podium"]
 
     active = []
     for cp in RCC_CHECKPOINTS:
         slug = cp.slug.lower()
+        if slug in FOUNDATION_RCC_SLUGS:
+            continue
         if slug == "podium" and not _is_ground_or_stilt_level(row):
             continue
-        if any(word in slug for word in PARKING_RCC_SKIP_WORDS):
+        if slug in PARKING_RCC_SKIP_SLUGS:
             continue
         active.append(cp)
     return active
@@ -562,7 +623,7 @@ def _work_progress_for_level(
         "Progress %": pct,
     })
 
-    if _is_parking_level(floor_row):
+    if _is_structure_only_level(floor_row):
         return pd.DataFrame(rows)
 
     for heading, checkpoints in FLAT_CHECKPOINT_GROUPS.items():
@@ -636,7 +697,7 @@ def _level_progress_rows(
         progress = _overall_progress_from_work(work_df)
 
         dates = _date_values_for_row(floor_row, _active_rcc_checkpoints(floor_row), floor_col_map)
-        if not _is_parking_level(floor_row) and not level_flats.empty:
+        if not _is_structure_only_level(floor_row) and not level_flats.empty:
             for _, flat_row in level_flats.iterrows():
                 dates.extend(_date_values_for_row(flat_row, FLAT_CHECKPOINTS, flat_col_map))
 
@@ -837,6 +898,36 @@ def _slab_casting_rows(floor_df: pd.DataFrame, floor_col_map, wing: str | None =
     return pd.DataFrame(rows)
 
 
+def _podium_rows(floor_df: pd.DataFrame, floor_col_map, wing: str | None = None) -> pd.DataFrame:
+    podium_cp = next((cp for cp in RCC_CHECKPOINTS if cp.slug == "podium"), None)
+    podium_col = floor_col_map.get(podium_cp) if podium_cp else None
+
+    if not podium_col or floor_df is None or floor_df.empty:
+        return pd.DataFrame()
+
+    df = floor_df.copy()
+    df["_wing_norm"] = df.apply(_wing_value, axis=1)
+    if wing:
+        df = df[df["_wing_norm"] == wing]
+
+    rows = []
+    for _, row in df.iterrows():
+        if not _is_ground_or_stilt_level(row):
+            continue
+
+        done = _is_done(row.get(podium_col))
+        rows.append({
+            "Wing": _wing_value(row),
+            "Level": _level_label(row),
+            "Display Order": _display_order(row),
+            "Podium Status": "Done" if done else "Pending",
+            "Progress %": 100 if done else 0,
+            "Podium Date": _parse_date(row.get(podium_col)),
+        })
+
+    return pd.DataFrame(rows)
+
+
 def _dashboard_rows(floor_df, flat_df, floor_col_map, flat_col_map, wing: str | None = None):
     wings = _wing_options(floor_df, flat_df) if wing is None else [wing]
     level_rows = []
@@ -858,8 +949,9 @@ def _dashboard_rows(floor_df, flat_df, floor_col_map, flat_col_map, wing: str | 
     levels = pd.concat(level_rows, ignore_index=True) if level_rows else pd.DataFrame()
     works = pd.concat(work_rows, ignore_index=True) if work_rows else pd.DataFrame()
     slab_cycles = _slab_casting_rows(floor_df, floor_col_map, wing)
+    podium = _podium_rows(floor_df, floor_col_map, wing)
 
-    return levels, works, slab_cycles
+    return levels, works, slab_cycles, podium
 
 
 def _wing_options(floor_df: pd.DataFrame, flat_df: pd.DataFrame) -> list[str]:
@@ -885,15 +977,17 @@ def _card(label: str, value: str, note: str = ""):
 
 
 def _render_dashboard_panel(floor_df, flat_df, floor_col_map, flat_col_map, wing: str | None):
-    levels, works, slab_cycles = _dashboard_rows(floor_df, flat_df, floor_col_map, flat_col_map, wing)
+    levels, works, slab_cycles, podium = _dashboard_rows(floor_df, flat_df, floor_col_map, flat_col_map, wing)
 
     progress = 0.0 if levels.empty else float(levels["Progress %"].mean())
     avg_duration = np.nan if levels.empty else pd.to_numeric(levels["Days Difference"], errors="coerce").dropna().mean()
     max_duration = np.nan if levels.empty else pd.to_numeric(levels["Days Difference"], errors="coerce").dropna().max()
     avg_cycle = np.nan if slab_cycles.empty else pd.to_numeric(slab_cycles["Slab Cycle Days"], errors="coerce").dropna().mean()
     slabs_casted = 0 if slab_cycles.empty else len(slab_cycles)
+    podium_done = 0 if podium.empty else int((podium["Podium Status"] == "Done").sum())
+    podium_total = 0 if podium.empty else int(len(podium))
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
         _card("Overall Progress", _fmt_pct(progress), "Average of level progress")
     with c2:
@@ -904,6 +998,8 @@ def _render_dashboard_panel(floor_df, flat_df, floor_col_map, flat_col_map, wing
         _card("Avg Level Duration", _fmt_days(avg_duration), "First to latest checkpoint")
     with c5:
         _card("Max Level Duration", _fmt_days(max_duration), "Slowest active level")
+    with c6:
+        _card("Podium Done", f"{podium_done}/{podium_total}", "Ground / Stilt podium")
 
     st.markdown("### Slab Casting Cycle")
     if slab_cycles.empty:
@@ -931,6 +1027,37 @@ def _render_dashboard_panel(floor_df, flat_df, floor_col_map, flat_col_map, wing
         show_cycles["Slab Cycle Days"] = show_cycles["Slab Cycle Days"].apply(lambda x: "-" if pd.isna(x) else int(x))
         st.dataframe(
             show_cycles[["Wing", "Level", "Casting Date", "Slab Cycle Days"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown("### Podium Progress")
+    if podium.empty:
+        st.info("No podium checkpoint rows found yet.")
+    else:
+        podium_chart_df = podium.copy()
+        podium_chart = (
+            alt.Chart(podium_chart_df)
+            .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+            .encode(
+                x=alt.X("Wing:N", title="Wing"),
+                y=alt.Y("Progress %:Q", scale=alt.Scale(domain=[0, 100]), title="Podium Progress"),
+                color=alt.Color(
+                    "Podium Status:N",
+                    scale=alt.Scale(domain=["Done", "Pending"], range=["#16a34a", "#cbd5e1"]),
+                    title="Status",
+                ),
+                column=alt.Column("Level:N", title=None),
+                tooltip=["Wing", "Level", "Podium Status", "Podium Date:T"],
+            )
+            .properties(height=220)
+        )
+        st.altair_chart(podium_chart, use_container_width=True)
+
+        podium_table = podium.copy()
+        podium_table["Podium Date"] = podium_table["Podium Date"].apply(_date_label)
+        st.dataframe(
+            podium_table[["Wing", "Level", "Podium Status", "Podium Date"]],
             use_container_width=True,
             hide_index=True,
         )
@@ -1070,8 +1197,10 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
     active_cps = _active_rcc_checkpoints(selected_row)
     form_prefix = f"cp_rcc_save_{_safe_key(_row_key(selected_row))}"
 
-    if _is_parking_level(selected_row):
-        st.info("Parking slab selected. Aluform, cover block, electrical, and sunk-side toilet checkpoints are not considered here.")
+    if _is_pre_rcc_level(selected_row):
+        st.info("Foundation level selected. These checkpoints are tracked wing-wise before Basement, Ground, and Stilt.")
+    elif _is_parking_level(selected_row):
+        st.info("Parking slab selected. Sunk-side toilet and cover block checkpoints are not considered here.")
 
     with st.form("cp_rcc_save_form", clear_on_submit=False):
         st.markdown(f"#### {active_wing} Wing - {active_slab}")
@@ -1079,6 +1208,7 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
             "Work Done Date",
             value=st.session_state.get("cp_rcc_work_done_date", _dt.date.today()),
             key="cp_rcc_work_done_date",
+            format="DD/MM/YYYY",
             help="Use this date for newly checked RCC checkpoints.",
         )
 
