@@ -989,29 +989,51 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
         st.warning("No slab/floor rows found. Please run the construction progress SQL first.")
         return
 
-    choices = []
-    for idx, row in floor_df.iterrows():
-        wing = _wing_value(row)
-        label = f"{wing} - {_level_label(row)}"
-        choices.append((idx, label))
+    wing_options = sorted([w for w in floor_df.apply(_wing_value, axis=1).dropna().unique().tolist() if w])
+    slab_options = sorted(
+        [s for s in floor_df.apply(_level_label, axis=1).dropna().unique().tolist() if str(s).strip()],
+        key=lambda s: _display_order(floor_df[floor_df.apply(_level_label, axis=1).eq(s)].iloc[0]) if not floor_df.empty else 0,
+    )
 
-    choices = sorted(choices, key=lambda x: str(x[1]))
-    label_to_idx = {label: idx for idx, label in choices}
-    labels = list(label_to_idx.keys())
+    if not wing_options or not slab_options:
+        st.warning("No wing/slab values found.")
+        return
 
     with st.form("cp_rcc_load_form", clear_on_submit=False):
-        selected_label = st.selectbox(
-            "Select slab / level",
-            labels,
-            index=labels.index(st.session_state.get("cp_rcc_selected_label", labels[0])) if st.session_state.get("cp_rcc_selected_label") in labels else 0,
+        c1, c2 = st.columns(2)
+        with c1:
+            selected_wing = st.selectbox(
+                "Select Wing",
+                wing_options,
+                index=wing_options.index(st.session_state.get("cp_rcc_selected_wing", wing_options[0])) if st.session_state.get("cp_rcc_selected_wing") in wing_options else 0,
+            )
+        with c2:
+            selected_slab = st.selectbox(
+                "Select Slab / Level",
+                slab_options,
+                index=slab_options.index(st.session_state.get("cp_rcc_selected_slab", slab_options[0])) if st.session_state.get("cp_rcc_selected_slab") in slab_options else 0,
+            )
+        load = st.form_submit_button(
+            "Show RCC Checkpoints",
+            use_container_width=True,
         )
-        load = st.form_submit_button("Show RCC Checkpoints", use_container_width=True)
 
-    if load or "cp_rcc_selected_label" not in st.session_state:
-        st.session_state["cp_rcc_selected_label"] = selected_label
+    if load or "cp_rcc_selected_wing" not in st.session_state:
+        st.session_state["cp_rcc_selected_wing"] = selected_wing
+        st.session_state["cp_rcc_selected_slab"] = selected_slab
 
-    selected_label = st.session_state.get("cp_rcc_selected_label", labels[0])
-    selected_row = floor_df.loc[label_to_idx[selected_label]]
+    active_wing = st.session_state.get("cp_rcc_selected_wing", wing_options[0])
+    active_slab = st.session_state.get("cp_rcc_selected_slab", slab_options[0])
+    selected_rows = floor_df[
+        floor_df.apply(_wing_value, axis=1).eq(active_wing)
+        & floor_df.apply(_level_label, axis=1).eq(active_slab)
+    ]
+
+    if selected_rows.empty:
+        st.warning("No slab row found for this wing and slab selection.")
+        return
+
+    selected_row = selected_rows.iloc[0]
     active_cps = _active_rcc_checkpoints(selected_row)
     form_prefix = f"cp_rcc_save_{_safe_key(_row_key(selected_row))}"
 
@@ -1019,7 +1041,7 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
         st.info("Parking slab selected. Aluform, cover block, electrical, and sunk-side toilet checkpoints are not considered here.")
 
     with st.form("cp_rcc_save_form", clear_on_submit=False):
-        st.markdown(f"#### {selected_label}")
+        st.markdown(f"#### {active_wing} Wing - {active_slab}")
         for cp in active_cps:
             col = floor_col_map.get(cp)
             current = selected_row.get(col) if col else None
@@ -1077,29 +1099,56 @@ def _render_update_flat(supabase_client, flat_df, flat_col_map):
         st.warning("No flat rows found. Please run the construction progress SQL first.")
         return
 
-    choices = []
-    for idx, row in flat_df.iterrows():
-        floor_no = _floor_no(row)
-        label = f"{_flat_label(row)} - Floor {floor_no if floor_no is not None else '-'}"
-        choices.append((idx, label))
+    wing_options = sorted([w for w in flat_df.apply(_wing_value, axis=1).dropna().unique().tolist() if w])
 
-    choices = sorted(choices, key=lambda x: str(x[1]))
-    label_to_idx = {label: idx for idx, label in choices}
-    labels = list(label_to_idx.keys())
+    def _flat_number_value(row):
+        for col in ["flat_number", "Flat Number", "flat"]:
+            if col in row and _is_done(row.get(col)):
+                return str(row.get(col)).strip()
+        return ""
+
+    flat_options = sorted(
+        [f for f in flat_df.apply(_flat_number_value, axis=1).dropna().unique().tolist() if str(f).strip()],
+        key=lambda x: (len(str(x)), str(x)),
+    )
+
+    if not wing_options or not flat_options:
+        st.warning("No wing/flat values found.")
+        return
 
     with st.form("cp_flat_load_form", clear_on_submit=False):
-        selected_label = st.selectbox(
-            "Select flat / common area",
-            labels,
-            index=labels.index(st.session_state.get("cp_flat_selected_label", labels[0])) if st.session_state.get("cp_flat_selected_label") in labels else 0,
-        )
+        c1, c2 = st.columns(2)
+        with c1:
+            selected_wing = st.selectbox(
+                "Select Wing",
+                wing_options,
+                index=wing_options.index(st.session_state.get("cp_flat_selected_wing", wing_options[0])) if st.session_state.get("cp_flat_selected_wing") in wing_options else 0,
+            )
+        with c2:
+            selected_flat = st.selectbox(
+                "Select Flat / Area",
+                flat_options,
+                index=flat_options.index(st.session_state.get("cp_flat_selected_flat", flat_options[0])) if st.session_state.get("cp_flat_selected_flat") in flat_options else 0,
+            )
         load = st.form_submit_button("Show Flat Checkpoints", use_container_width=True)
 
-    if load or "cp_flat_selected_label" not in st.session_state:
-        st.session_state["cp_flat_selected_label"] = selected_label
+    if load or "cp_flat_selected_wing" not in st.session_state:
+        st.session_state["cp_flat_selected_wing"] = selected_wing
+        st.session_state["cp_flat_selected_flat"] = selected_flat
 
-    selected_label = st.session_state.get("cp_flat_selected_label", labels[0])
-    selected_row = flat_df.loc[label_to_idx[selected_label]]
+    active_wing = st.session_state.get("cp_flat_selected_wing", wing_options[0])
+    active_flat = st.session_state.get("cp_flat_selected_flat", flat_options[0])
+    selected_rows = flat_df[
+        flat_df.apply(_wing_value, axis=1).eq(active_wing)
+        & flat_df.apply(_flat_number_value, axis=1).eq(active_flat)
+    ]
+
+    if selected_rows.empty:
+        st.warning("No flat row found for this wing and flat selection.")
+        return
+
+    selected_row = selected_rows.iloc[0]
+    selected_label = f"{_flat_label(selected_row)} - Floor {_floor_no(selected_row) if _floor_no(selected_row) is not None else '-'}"
     form_prefix = f"cp_flat_save_{_safe_key(_row_key(selected_row))}"
 
     with st.form("cp_flat_save_form", clear_on_submit=False):
@@ -1153,47 +1202,82 @@ def _json_data(value) -> str:
     return json.dumps(value, default=default)
 
 
-def _render_clickable_floor_chart(items: list[dict], title: str):
+def _render_clickable_floor_chart(data_by_wing: dict[str, list[dict]], title: str):
     html = f"""
     <div id="cpFloorApp" class="cp-iframe-shell">
-      <div class="cp-iframe-title">{escape(title)}</div>
+      <div class="cp-topbar">
+        <div class="cp-iframe-heading">{escape(title)}</div>
+        <div id="floorWingBtns" class="cp-wing-buttons"></div>
+      </div>
       <div id="floorGrid" class="cp-iframe-building"></div>
-      <div id="floorReport" class="cp-iframe-report"></div>
+      <div id="floorModal" class="cp-modal hidden">
+        <div class="cp-modal-card">
+          <button id="floorModalClose" class="cp-modal-close">×</button>
+          <div id="floorReport"></div>
+        </div>
+      </div>
     </div>
 
     <style>
       body{{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#0f172a;}}
       .cp-iframe-shell{{padding:8px 8px 18px;}}
-      .cp-iframe-title{{background:#334155;color:#fff;text-align:center;font-weight:900;letter-spacing:.04em;text-transform:uppercase;border-radius:12px 12px 4px 4px;padding:12px;margin:0 auto;max-width:980px;}}
-      .cp-iframe-building{{max-width:980px;margin:0 auto 16px;border-left:5px solid #94a3b8;border-right:5px solid #94a3b8;border-bottom:5px solid #94a3b8;background:linear-gradient(90deg,#f1f5f9 0,#fff 7%,#fff 93%,#f1f5f9 100%);box-shadow:0 18px 42px rgba(15,23,42,.12);}}
-      .cp-iframe-floor{{display:grid;grid-template-columns:130px 1fr 96px;gap:10px;align-items:center;padding:8px 12px;border-bottom:1px solid #cbd5e1;cursor:pointer;transition:.15s ease;}}
-      .cp-iframe-floor:hover,.cp-iframe-floor.active{{background:#eff6ff;}}
-      .cp-iframe-floor-label{{font-size:13px;font-weight:900;}}
-      .cp-iframe-floor-bar{{height:30px;position:relative;border:1px solid #cbd5e1;border-radius:7px;overflow:hidden;background:repeating-linear-gradient(90deg,#f8fafc 0,#f8fafc 22px,#e2e8f0 23px,#e2e8f0 24px);}}
-      .cp-iframe-floor-fill{{position:absolute;inset:0 auto 0 0;opacity:.72;}}
-      .cp-iframe-floor-pct{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900;}}
+      .cp-topbar{{max-width:1180px;margin:0 auto 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}}
+      .cp-iframe-heading{{font-size:26px;font-weight:900;color:#111827;}}
+      .cp-wing-buttons{{display:flex;gap:8px;flex-wrap:wrap;}}
+      .cp-wing-btn{{border:0;border-radius:10px;background:#e2e8f0;color:#1e293b;font-weight:900;padding:10px 18px;cursor:pointer;font-size:15px;}}
+      .cp-wing-btn.active{{background:#2f80bd;color:#fff;}}
+      .cp-iframe-building{{max-width:980px;margin:0 auto 16px;border-left:5px solid #111827;border-right:5px solid #111827;border-bottom:5px solid #111827;background:linear-gradient(90deg,#f1f5f9 0,#fff 7%,#fff 93%,#f1f5f9 100%);box-shadow:0 18px 42px rgba(15,23,42,.12);}}
+      .cp-building-title{{background:#e5e7eb;border-bottom:3px solid #111827;text-align:center;font-size:24px;font-weight:900;padding:8px;text-decoration:underline;}}
+      .cp-iframe-floor{{display:grid;grid-template-columns:130px 1fr 96px;gap:10px;align-items:center;padding:8px 12px;border-bottom:2px solid #111827;cursor:pointer;transition:.15s ease;}}
+      .cp-iframe-floor:hover{{background:#eff6ff;}}
+      .cp-iframe-floor-label{{font-size:14px;font-weight:900;}}
+      .cp-iframe-floor-bar{{height:34px;position:relative;border:2px solid #111827;overflow:hidden;background:repeating-linear-gradient(90deg,#f8fafc 0,#f8fafc 22px,#e2e8f0 23px,#e2e8f0 24px);}}
+      .cp-iframe-floor-fill{{position:absolute;inset:0 auto 0 0;opacity:.85;}}
+      .cp-iframe-floor-pct{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;color:#111827;}}
       .cp-iframe-days{{font-size:12px;font-weight:800;text-align:right;color:#334155;}}
-      .cp-iframe-report{{max-width:980px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;box-shadow:0 10px 24px rgba(15,23,42,.08);}}
-      .cp-report-head{{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8fafc;padding:12px 14px;border-bottom:1px solid #e2e8f0;font-weight:900;}}
-      table{{width:100%;border-collapse:collapse;font-size:13px;}}
-      th{{background:#0f766e;color:#fff;text-align:left;padding:9px 10px;}}
-      td{{border-bottom:1px solid #e2e8f0;padding:9px 10px;}}
+      .cp-modal{{position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:18px;}}
+      .cp-modal.hidden{{display:none;}}
+      .cp-modal-card{{position:relative;width:min(960px,96vw);max-height:86vh;overflow:auto;background:#fff;border-radius:14px;box-shadow:0 26px 80px rgba(0,0,0,.34);}}
+      .cp-modal-close{{position:sticky;top:10px;float:right;margin:10px 10px 0 0;width:34px;height:34px;border:0;border-radius:999px;background:#0f172a;color:#fff;font-size:24px;line-height:1;cursor:pointer;z-index:2;}}
+      .cp-report-head{{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8fafc;padding:18px 20px;border-bottom:1px solid #e2e8f0;font-weight:900;font-size:18px;}}
+      table{{width:100%;border-collapse:collapse;font-size:14px;}}
+      th{{background:#0f766e;color:#fff;text-align:left;padding:10px 12px;}}
+      td{{border-bottom:1px solid #e2e8f0;padding:10px 12px;}}
       tr:last-child td{{border-bottom:0;}}
       .ta-r{{text-align:right;}}
     </style>
 
     <script>
-      const levels = {_json_data(items)};
+      const dataByWing = {_json_data(data_by_wing)};
+      const wings = Object.keys(dataByWing);
+      const wingBtns = document.getElementById("floorWingBtns");
       const grid = document.getElementById("floorGrid");
+      const modal = document.getElementById("floorModal");
+      const modalClose = document.getElementById("floorModalClose");
       const report = document.getElementById("floorReport");
-      let selected = 0;
+      let activeWing = wings[0] || "";
+
+      modalClose.onclick = () => modal.classList.add("hidden");
+      modal.onclick = (e) => {{ if (e.target === modal) modal.classList.add("hidden"); }};
+
+      function renderWingButtons(){{
+        wingBtns.innerHTML = "";
+        wings.forEach(w => {{
+          const btn = document.createElement("button");
+          btn.className = "cp-wing-btn" + (w === activeWing ? " active" : "");
+          btn.textContent = `${{w}} Wing`;
+          btn.onclick = () => {{ activeWing = w; renderWingButtons(); renderGrid(); }};
+          wingBtns.appendChild(btn);
+        }});
+      }}
 
       function renderGrid(){{
-        grid.innerHTML = "";
-        levels.forEach((item, idx) => {{
+        const levels = dataByWing[activeWing] || [];
+        grid.innerHTML = `<div class="cp-building-title">${{activeWing}} Wing</div>`;
+        levels.forEach((item) => {{
           const row = document.createElement("div");
-          row.className = "cp-iframe-floor" + (idx === selected ? " active" : "");
-          row.onclick = () => {{ selected = idx; renderGrid(); renderReport(); }};
+          row.className = "cp-iframe-floor";
+          row.onclick = () => openReport(item);
           row.innerHTML = `
             <div class="cp-iframe-floor-label">${{item.level}}</div>
             <div class="cp-iframe-floor-bar">
@@ -1212,16 +1296,11 @@ def _render_clickable_floor_chart(items: list[dict], title: str):
         return td;
       }}
 
-      function renderReport(){{
-        const item = levels[selected] || levels[0];
-        if (!item) {{
-          report.innerHTML = "<div class='cp-report-head'>No report data</div>";
-          return;
-        }}
+      function openReport(item){{
         const wrap = document.createElement("div");
         const head = document.createElement("div");
         head.className = "cp-report-head";
-        head.innerHTML = `<span>${{item.level}} Report</span><span>${{Math.round(item.progress)}}%</span>`;
+        head.innerHTML = `<span>${{activeWing}} Wing - ${{item.level}} Report</span><span>${{Math.round(item.progress)}}%</span>`;
         const table = document.createElement("table");
         table.innerHTML = "<thead><tr><th>Main Work</th><th class='ta-r'>Done</th><th class='ta-r'>Total</th><th class='ta-r'>Progress</th></tr></thead>";
         const tbody = document.createElement("tbody");
@@ -1238,55 +1317,97 @@ def _render_clickable_floor_chart(items: list[dict], title: str):
         wrap.appendChild(table);
         report.innerHTML = "";
         report.appendChild(wrap);
+        modal.classList.remove("hidden");
       }}
 
+      renderWingButtons();
       renderGrid();
-      renderReport();
     </script>
     """
 
     components.html(html, height=820, scrolling=True)
 
-
-def _render_clickable_flat_chart(items: list[dict], title: str):
+def _render_clickable_flat_chart(data_by_wing: dict[str, list[dict]], title: str):
     html = f"""
     <div id="cpFlatApp" class="cp-flat-shell">
-      <div class="cp-flat-title">{escape(title)}</div>
+      <div class="cp-flat-toolbar">
+        <div class="cp-flat-heading">{escape(title)}</div>
+        <div id="flatWingBtns" class="cp-wing-buttons"></div>
+      </div>
+      <div id="flatKpis" class="cp-kpi-grid"></div>
       <div id="flatGrid" class="cp-flat-grid"></div>
-      <div id="flatReport" class="cp-flat-report"></div>
+      <div id="flatModal" class="cp-modal hidden">
+        <div class="cp-modal-card">
+          <button id="flatModalClose" class="cp-modal-close">×</button>
+          <div id="flatReport"></div>
+        </div>
+      </div>
     </div>
 
     <style>
       body{{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#0f172a;}}
       .cp-flat-shell{{padding:8px 8px 18px;}}
-      .cp-flat-title{{max-width:1180px;margin:0 auto;background:#334155;color:#fff;text-align:center;font-weight:900;letter-spacing:.04em;text-transform:uppercase;border-radius:14px 14px 4px 4px;padding:12px;}}
-      .cp-flat-grid{{max-width:1180px;margin:0 auto 16px;border-left:5px solid #94a3b8;border-right:5px solid #94a3b8;border-bottom:5px solid #94a3b8;background:linear-gradient(90deg,#f1f5f9 0,#fff 6%,#fff 94%,#f1f5f9 100%);box-shadow:0 18px 42px rgba(15,23,42,.12);}}
-      .cp-flat-row{{display:grid;grid-template-columns:86px repeat(10,1fr);gap:6px;padding:7px 9px;border-bottom:1px solid #cbd5e1;align-items:stretch;}}
-      .cp-flat-floor{{display:flex;align-items:center;justify-content:center;text-align:center;background:#e2e8f0;border-radius:8px;font-size:12px;font-weight:900;line-height:1.15;}}
-      .cp-flat-cell{{position:relative;min-height:56px;border:2px solid #cbd5e1;border-radius:8px;background:#f8fafc;overflow:hidden;cursor:pointer;transition:.15s ease;}}
-      .cp-flat-cell:hover,.cp-flat-cell.active{{transform:translateY(-1px);box-shadow:0 8px 16px rgba(15,23,42,.14);}}
-      .cp-flat-fill{{position:absolute;inset:0 auto 0 0;opacity:.18;}}
-      .cp-flat-text{{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;text-align:center;}}
-      .cp-flat-text strong{{font-size:13px;font-weight:900;}}
-      .cp-flat-text span{{font-size:12px;font-weight:900;color:#475569;}}
-      .cp-flat-report{{max-width:1180px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;box-shadow:0 10px 24px rgba(15,23,42,.08);}}
-      .cp-report-head{{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8fafc;padding:12px 14px;border-bottom:1px solid #e2e8f0;font-weight:900;}}
-      .cp-section-title{{background:#ecfeff;color:#155e75;font-weight:900;padding:9px 10px;border-top:1px solid #cffafe;border-bottom:1px solid #cffafe;}}
+      .cp-flat-toolbar{{max-width:1180px;margin:0 auto 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}}
+      .cp-flat-heading{{font-size:26px;font-weight:900;color:#111827;}}
+      .cp-wing-buttons{{display:flex;gap:8px;flex-wrap:wrap;}}
+      .cp-wing-btn{{border:0;border-radius:10px;background:#e2e8f0;color:#1e293b;font-weight:900;padding:10px 18px;cursor:pointer;font-size:15px;}}
+      .cp-wing-btn.active{{background:#2f80bd;color:#fff;}}
+      .cp-kpi-grid{{max-width:1180px;margin:0 auto 14px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}}
+      .cp-kpi{{border:1px solid #e2e8f0;border-radius:12px;padding:13px 16px;box-shadow:0 8px 24px rgba(15,23,42,.06);}}
+      .cp-kpi span{{display:block;font-size:12px;color:#64748b;font-weight:900;}}
+      .cp-kpi strong{{display:block;font-size:24px;margin-top:5px;}}
+      .cp-flat-grid{{max-width:1180px;margin:0 auto 16px;border:3px solid #111827;background:#fff;box-shadow:0 18px 42px rgba(15,23,42,.12);}}
+      .cp-wing-title{{background:#e5e7eb;border-bottom:2px solid #111827;text-align:center;font-size:25px;font-weight:900;padding:8px;text-decoration:underline;}}
+      .cp-flat-row{{display:grid;grid-template-columns:repeat(10,1fr);gap:0;border-bottom:2px solid #111827;}}
+      .cp-flat-cell{{position:relative;min-height:58px;border-right:2px solid #111827;background:#f6c343;overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center;text-align:center;transition:.12s ease;}}
+      .cp-flat-cell:nth-child(10n){{border-right:0;}}
+      .cp-flat-cell:hover{{filter:brightness(.96);outline:4px solid #2563eb;outline-offset:-4px;}}
+      .cp-flat-cell.done{{background:#078d00;color:#fff;}}
+      .cp-flat-cell.mid{{background:#f6c343;color:#111827;}}
+      .cp-flat-cell.low{{background:#ef4444;color:#fff;}}
+      .cp-flat-text strong{{font-size:18px;font-weight:1000;display:block;line-height:1.05;}}
+      .cp-flat-text span{{font-size:12px;font-weight:900;display:block;margin-top:3px;}}
+      .cp-modal{{position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:18px;}}
+      .cp-modal.hidden{{display:none;}}
+      .cp-modal-card{{position:relative;width:min(1120px,96vw);max-height:86vh;overflow:auto;background:#fff;border-radius:14px;box-shadow:0 26px 80px rgba(0,0,0,.34);}}
+      .cp-modal-close{{position:sticky;top:10px;float:right;margin:10px 10px 0 0;width:34px;height:34px;border:0;border-radius:999px;background:#0f172a;color:#fff;font-size:24px;line-height:1;cursor:pointer;z-index:2;}}
+      .cp-report-head{{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8fafc;padding:18px 20px;border-bottom:1px solid #e2e8f0;font-weight:900;font-size:18px;}}
+      .cp-section-title{{background:#ecfeff;color:#155e75;font-weight:900;padding:10px 12px;border-top:1px solid #cffafe;border-bottom:1px solid #cffafe;}}
       table{{width:100%;border-collapse:collapse;font-size:13px;}}
       th{{background:#0f766e;color:#fff;text-align:left;padding:9px 10px;}}
       td{{border-bottom:1px solid #e2e8f0;padding:8px 10px;vertical-align:top;}}
       tr:last-child td{{border-bottom:0;}}
-      .done{{color:#047857;font-weight:900;}}
-      .pending{{color:#b45309;font-weight:900;}}
+      .doneText{{color:#047857;font-weight:900;}}
+      .pendingText{{color:#b45309;font-weight:900;}}
+      @media(max-width:900px){{.cp-kpi-grid{{grid-template-columns:repeat(2,minmax(0,1fr));}}.cp-flat-cell{{min-height:48px;}}.cp-flat-text strong{{font-size:14px;}}}}
     </style>
 
     <script>
-      const flats = {_json_data(items)};
+      const dataByWing = {_json_data(data_by_wing)};
+      const wings = Object.keys(dataByWing);
+      const wingBtns = document.getElementById("flatWingBtns");
+      const kpis = document.getElementById("flatKpis");
       const grid = document.getElementById("flatGrid");
+      const modal = document.getElementById("flatModal");
+      const modalClose = document.getElementById("flatModalClose");
       const report = document.getElementById("flatReport");
-      let selectedKey = flats.length ? flats[0].key : null;
+      let activeWing = wings[0] || "";
 
-      function groupedByFloor(){{
+      modalClose.onclick = () => modal.classList.add("hidden");
+      modal.onclick = (e) => {{ if (e.target === modal) modal.classList.add("hidden"); }};
+
+      function renderWingButtons(){{
+        wingBtns.innerHTML = "";
+        wings.forEach(w => {{
+          const btn = document.createElement("button");
+          btn.className = "cp-wing-btn" + (w === activeWing ? " active" : "");
+          btn.textContent = `${{w}} Wing`;
+          btn.onclick = () => {{ activeWing = w; renderWingButtons(); renderGrid(); }};
+          wingBtns.appendChild(btn);
+        }});
+      }}
+
+      function groupedByFloor(flats){{
         const out = new Map();
         flats.forEach(f => {{
           const key = String(f.floor);
@@ -1296,23 +1417,32 @@ def _render_clickable_flat_chart(items: list[dict], title: str):
         return [...out.entries()].sort((a,b) => Number(b[0]) - Number(a[0]));
       }}
 
+      function statusClass(p){{
+        if (p >= 90) return "done";
+        if (p >= 35) return "mid";
+        return "low";
+      }}
+
       function renderGrid(){{
-        grid.innerHTML = "";
-        groupedByFloor().forEach(([floor, cells]) => {{
+        const flats = dataByWing[activeWing] || [];
+        const total = flats.length;
+        const done = flats.filter(f => Number(f.progress || 0) >= 100).length;
+        const avg = total ? flats.reduce((a,f)=>a+Number(f.progress || 0),0)/total : 0;
+        const pending = total - done;
+        kpis.innerHTML = `
+          <div class="cp-kpi"><span>Total Flats</span><strong>${{total}}</strong></div>
+          <div class="cp-kpi"><span>Completed</span><strong>${{done}}</strong></div>
+          <div class="cp-kpi"><span>Pending</span><strong>${{pending}}</strong></div>
+          <div class="cp-kpi"><span>Average Progress</span><strong>${{Math.round(avg)}}%</strong></div>`;
+        grid.innerHTML = `<div class="cp-wing-title">${{activeWing}} Wing</div>`;
+        groupedByFloor(flats).forEach(([floor, cells]) => {{
           const row = document.createElement("div");
           row.className = "cp-flat-row";
-          const label = document.createElement("div");
-          label.className = "cp-flat-floor";
-          label.innerHTML = `Floor<br>${{floor}}`;
-          row.appendChild(label);
-          cells.sort((a,b) => String(a.flat).localeCompare(String(b.flat))).forEach(item => {{
+          cells.sort((a,b) => String(a.flatShort).localeCompare(String(b.flatShort))).forEach(item => {{
             const cell = document.createElement("div");
-            cell.className = "cp-flat-cell" + (item.key === selectedKey ? " active" : "");
-            cell.style.borderColor = item.color;
-            cell.onclick = () => {{ selectedKey = item.key; renderGrid(); renderReport(); }};
-            cell.innerHTML = `
-              <div class="cp-flat-fill" style="width:${{Math.max(0, Math.min(item.progress, 100))}}%;background:${{item.color}}"></div>
-              <div class="cp-flat-text"><strong>${{item.flatShort}}</strong><span>${{Math.round(item.progress)}}%</span></div>`;
+            cell.className = `cp-flat-cell ${{statusClass(Number(item.progress || 0))}}`;
+            cell.onclick = () => openReport(item);
+            cell.innerHTML = `<div class="cp-flat-text"><strong>${{item.flatShort}}</strong><span>${{Math.round(item.progress)}}%</span></div>`;
             row.appendChild(cell);
           }});
           grid.appendChild(row);
@@ -1326,13 +1456,7 @@ def _render_clickable_flat_chart(items: list[dict], title: str):
         return td;
       }}
 
-      function renderReport(){{
-        const item = flats.find(f => f.key === selectedKey) || flats[0];
-        if (!item) {{
-          report.innerHTML = "<div class='cp-report-head'>No report data</div>";
-          return;
-        }}
-
+      function openReport(item){{
         const wrap = document.createElement("div");
         const head = document.createElement("div");
         head.className = "cp-report-head";
@@ -1352,7 +1476,6 @@ def _render_clickable_flat_chart(items: list[dict], title: str):
           const done = rows.filter(r => r.Status === "Done").length;
           section.textContent = `${{mainWork}} - ${{done}}/${{rows.length}}`;
           wrap.appendChild(section);
-
           const table = document.createElement("table");
           table.innerHTML = "<thead><tr><th>Section</th><th>Checkpoint</th><th>Status</th><th>Date</th><th>Consumption</th></tr></thead>";
           const tbody = document.createElement("tbody");
@@ -1360,7 +1483,7 @@ def _render_clickable_flat_chart(items: list[dict], title: str):
             const tr = document.createElement("tr");
             tr.appendChild(cell(r.Section));
             tr.appendChild(cell(r.Checkpoint));
-            tr.appendChild(cell(r.Status, r.Status === "Done" ? "done" : "pending"));
+            tr.appendChild(cell(r.Status, r.Status === "Done" ? "doneText" : "pendingText"));
             tr.appendChild(cell(r.Date));
             tr.appendChild(cell(r.Consumption));
             tbody.appendChild(tr);
@@ -1368,75 +1491,119 @@ def _render_clickable_flat_chart(items: list[dict], title: str):
           table.appendChild(tbody);
           wrap.appendChild(table);
         }});
-
         report.innerHTML = "";
         report.appendChild(wrap);
+        modal.classList.remove("hidden");
       }}
 
+      renderWingButtons();
       renderGrid();
-      renderReport();
     </script>
     """
 
     components.html(html, height=980, scrolling=True)
 
-
-def _render_consumption_chart(items: list[dict], title: str):
+def _render_consumption_chart(data_by_wing: dict[str, list[dict]], title: str):
     html = f"""
     <div class="cp-cons-shell">
-      <div class="cp-cons-title">{escape(title)}</div>
+      <div class="cp-cons-toolbar">
+        <div class="cp-cons-heading">{escape(title)}</div>
+        <div id="consWingBtns" class="cp-wing-buttons"></div>
+      </div>
+      <div id="consKpis" class="cp-kpi-grid"></div>
       <div id="consGrid" class="cp-cons-grid"></div>
     </div>
 
     <style>
       body{{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#0f172a;}}
       .cp-cons-shell{{padding:8px 8px 18px;}}
-      .cp-cons-title{{max-width:1180px;margin:0 auto;background:#334155;color:#fff;text-align:center;font-weight:900;letter-spacing:.04em;text-transform:uppercase;border-radius:14px 14px 4px 4px;padding:12px;}}
-      .cp-cons-grid{{max-width:1180px;margin:0 auto 16px;border-left:5px solid #94a3b8;border-right:5px solid #94a3b8;border-bottom:5px solid #94a3b8;background:linear-gradient(90deg,#f1f5f9 0,#fff 6%,#fff 94%,#f1f5f9 100%);box-shadow:0 18px 42px rgba(15,23,42,.12);}}
-      .cp-cons-row{{display:grid;grid-template-columns:86px repeat(10,1fr);gap:6px;padding:7px 9px;border-bottom:1px solid #cbd5e1;align-items:stretch;}}
-      .cp-cons-floor{{display:flex;align-items:center;justify-content:center;text-align:center;background:#e2e8f0;border-radius:8px;font-size:12px;font-weight:900;line-height:1.15;}}
-      .cp-cons-cell{{min-height:72px;border:2px solid #cbd5e1;border-radius:8px;background:#f8fafc;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:3px;padding:5px;}}
-      .cp-cons-cell.has{{border-color:#0ea5e9;background:#eff6ff;}}
-      .cp-cons-flat{{font-size:12px;font-weight:900;color:#0f172a;}}
-      .cp-cons-val{{font-size:12px;font-weight:900;color:#0369a1;}}
-      .cp-cons-sub{{font-size:11px;font-weight:800;color:#475569;}}
+      .cp-cons-toolbar{{max-width:1180px;margin:0 auto 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}}
+      .cp-cons-heading{{font-size:26px;font-weight:900;color:#111827;}}
+      .cp-wing-buttons{{display:flex;gap:8px;flex-wrap:wrap;}}
+      .cp-wing-btn{{border:0;border-radius:10px;background:#e2e8f0;color:#1e293b;font-weight:900;padding:10px 18px;cursor:pointer;font-size:15px;}}
+      .cp-wing-btn.active{{background:#2f80bd;color:#fff;}}
+      .cp-kpi-grid{{max-width:1180px;margin:0 auto 14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}}
+      .cp-kpi{{border:1px solid #e2e8f0;border-radius:12px;padding:13px 16px;box-shadow:0 8px 24px rgba(15,23,42,.06);}}
+      .cp-kpi span{{display:block;font-size:12px;color:#64748b;font-weight:900;}}
+      .cp-kpi strong{{display:block;font-size:24px;margin-top:5px;}}
+      .cp-cons-grid{{max-width:1180px;margin:0 auto 16px;border:3px solid #111827;background:#fff;box-shadow:0 18px 42px rgba(15,23,42,.12);}}
+      .cp-wing-title{{background:#e5e7eb;border-bottom:2px solid #111827;text-align:center;font-size:25px;font-weight:900;padding:8px;text-decoration:underline;}}
+      .cp-cons-row{{display:grid;grid-template-columns:repeat(10,1fr);gap:0;border-bottom:2px solid #111827;}}
+      .cp-cons-cell{{min-height:72px;border-right:2px solid #111827;background:#f6c343;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:3px;padding:5px;}}
+      .cp-cons-cell:nth-child(10n){{border-right:0;}}
+      .cp-cons-cell.has{{background:#078d00;color:#fff;}}
+      .cp-cons-flat{{font-size:14px;font-weight:1000;}}
+      .cp-cons-val{{font-size:12px;font-weight:900;}}
+      .cp-cons-sub{{font-size:11px;font-weight:800;}}
+      @media(max-width:900px){{.cp-kpi-grid{{grid-template-columns:1fr;}}.cp-cons-cell{{min-height:58px;}}}}
     </style>
 
     <script>
-      const cells = {_json_data(items)};
+      const dataByWing = {_json_data(data_by_wing)};
+      const wings = Object.keys(dataByWing);
+      const wingBtns = document.getElementById("consWingBtns");
+      const kpis = document.getElementById("consKpis");
       const grid = document.getElementById("consGrid");
-      const grouped = new Map();
-      cells.forEach(c => {{
-        const key = String(c.floor);
-        if (!grouped.has(key)) grouped.set(key, []);
-        grouped.get(key).push(c);
-      }});
-      [...grouped.entries()].sort((a,b) => Number(b[0]) - Number(a[0])).forEach(([floor, rowCells]) => {{
-        const row = document.createElement("div");
-        row.className = "cp-cons-row";
-        const label = document.createElement("div");
-        label.className = "cp-cons-floor";
-        label.innerHTML = `Floor<br>${{floor}}`;
-        row.appendChild(label);
-        rowCells.sort((a,b) => String(a.flatShort).localeCompare(String(b.flatShort))).forEach(item => {{
-          const cell = document.createElement("div");
-          cell.className = "cp-cons-cell" + (item.hasValue ? " has" : "");
-          cell.innerHTML = `
-            <div class="cp-cons-flat">${{item.flatShort}}</div>
-            <div class="cp-cons-val">${{item.valueOne}}</div>
-            <div class="cp-cons-sub">${{item.valueTwo}}</div>`;
-          row.appendChild(cell);
+      let activeWing = wings[0] || "";
+
+      function renderWingButtons(){{
+        wingBtns.innerHTML = "";
+        wings.forEach(w => {{
+          const btn = document.createElement("button");
+          btn.className = "cp-wing-btn" + (w === activeWing ? " active" : "");
+          btn.textContent = `${{w}} Wing`;
+          btn.onclick = () => {{ activeWing = w; renderWingButtons(); renderGrid(); }};
+          wingBtns.appendChild(btn);
         }});
-        grid.appendChild(row);
-      }});
+      }}
+
+      function groupedByFloor(cells){{
+        const grouped = new Map();
+        cells.forEach(c => {{
+          const key = String(c.floor);
+          if (!grouped.has(key)) grouped.set(key, []);
+          grouped.get(key).push(c);
+        }});
+        return [...grouped.entries()].sort((a,b) => Number(b[0]) - Number(a[0]));
+      }}
+
+      function renderGrid(){{
+        const cells = dataByWing[activeWing] || [];
+        const withValue = cells.filter(c => c.hasValue).length;
+        kpis.innerHTML = `
+          <div class="cp-kpi"><span>Total Flats</span><strong>${{cells.length}}</strong></div>
+          <div class="cp-kpi"><span>Consumption Entered</span><strong>${{withValue}}</strong></div>
+          <div class="cp-kpi"><span>Pending</span><strong>${{cells.length - withValue}}</strong></div>`;
+        grid.innerHTML = `<div class="cp-wing-title">${{activeWing}} Wing</div>`;
+        groupedByFloor(cells).forEach(([floor, rowCells]) => {{
+          const row = document.createElement("div");
+          row.className = "cp-cons-row";
+          rowCells.sort((a,b) => String(a.flatShort).localeCompare(String(b.flatShort))).forEach(item => {{
+            const cell = document.createElement("div");
+            cell.className = "cp-cons-cell" + (item.hasValue ? " has" : "");
+            cell.innerHTML = `
+              <div class="cp-cons-flat">${{item.flatShort}}</div>
+              <div class="cp-cons-val">${{item.valueOne}}</div>
+              <div class="cp-cons-sub">${{item.valueTwo}}</div>`;
+            row.appendChild(cell);
+          }});
+          grid.appendChild(row);
+        }});
+      }}
+
+      renderWingButtons();
+      renderGrid();
     </script>
     """
 
-    components.html(html, height=780, scrolling=True)
-
+    components.html(html, height=840, scrolling=True)
 
 def _render_consumption_tab(flat_df, wings):
     st.markdown("### Consumption Tracker")
+
+    if not wings:
+        st.warning("No wings found.")
+        return
 
     if flat_df.empty:
         st.warning("No flat rows found.")
@@ -1451,11 +1618,6 @@ def _render_consumption_tab(flat_df, wings):
     area_options = list(dict.fromkeys([cp.section for cp in consumption_cps]))
 
     with st.form("cp_consumption_view_form", clear_on_submit=False):
-        selected_wing = st.selectbox(
-            "Select Wing",
-            wings,
-            index=wings.index(st.session_state.get("cp_consumption_wing", wings[0])) if st.session_state.get("cp_consumption_wing") in wings else 0,
-        )
         selected_area = st.selectbox(
             "Select Area / Process",
             area_options,
@@ -1472,45 +1634,48 @@ def _render_consumption_tab(flat_df, wings):
 
         show = st.form_submit_button("Show Consumption Chart", use_container_width=True)
 
-    if show or "cp_consumption_wing" not in st.session_state:
-        st.session_state["cp_consumption_wing"] = selected_wing
+    if show or "cp_consumption_area" not in st.session_state:
         st.session_state["cp_consumption_area"] = selected_area
         st.session_state["cp_consumption_checkpoint"] = selected_checkpoint_label
 
-    wing = st.session_state.get("cp_consumption_wing", wings[0])
     area = st.session_state.get("cp_consumption_area", area_options[0])
     cp_label = st.session_state.get("cp_consumption_checkpoint", checkpoint_labels[0])
     cp = next((x for x in consumption_cps if x.section == area and x.label == cp_label), checkpoint_options[0])
     fields = _consumption_fields(cp)
 
-    wing_df = flat_df[flat_df.apply(_wing_value, axis=1) == wing].copy()
-    items = []
+    data_by_wing = {}
 
-    for _, row in wing_df.iterrows():
-        floor = _floor_no(row)
-        if floor is None:
-            continue
+    for wing in wings:
+        wing_df = flat_df[flat_df.apply(_wing_value, axis=1) == wing].copy()
+        items = []
 
-        flat_name = _flat_label(row)
-        flat_short = flat_name.replace(f"{wing} ", "").split("(")[0].strip()
-        values = []
+        for _, row in wing_df.iterrows():
+            floor = _floor_no(row)
+            if floor is None:
+                continue
 
-        for field in fields:
-            col = _consumption_column(row, cp, field["suffix"])
-            values.append(_format_qty(row.get(col) if col else np.nan, field["unit"]))
+            flat_name = _flat_label(row)
+            flat_short = flat_name.replace(f"{wing} ", "").split("(")[0].strip()
+            values = []
 
-        while len(values) < 2:
-            values.append("-")
+            for field in fields:
+                col = _consumption_column(row, cp, field["suffix"])
+                values.append(_format_qty(row.get(col) if col else np.nan, field["unit"]))
 
-        items.append({
-            "floor": floor,
-            "flatShort": flat_short,
-            "valueOne": values[0],
-            "valueTwo": values[1],
-            "hasValue": any(v != "-" for v in values),
-        })
+            while len(values) < 2:
+                values.append("-")
 
-    _render_consumption_chart(items, f"Wing {wing} - {area} - {cp.label}")
+            items.append({
+                "floor": floor,
+                "flatShort": flat_short,
+                "valueOne": values[0],
+                "valueTwo": values[1],
+                "hasValue": any(v != "-" for v in values),
+            })
+
+        data_by_wing[wing] = items
+
+    _render_consumption_chart(data_by_wing, f"{area} - {cp.label}")
 
 
 def _render_floorwise(floor_df, flat_df, floor_col_map, flat_col_map, wings):
@@ -1520,48 +1685,36 @@ def _render_floorwise(floor_df, flat_df, floor_col_map, flat_col_map, wings):
         st.warning("No wings found.")
         return
 
-    with st.form("cp_floor_view_form", clear_on_submit=False):
-        selected_wing = st.selectbox(
-            "Select Wing",
-            wings,
-            index=wings.index(st.session_state.get("cp_floor_wing", wings[0])) if st.session_state.get("cp_floor_wing") in wings else 0,
-        )
-        show = st.form_submit_button("Show Floor Progress", use_container_width=True)
+    data_by_wing = {}
 
-    if show or "cp_floor_wing" not in st.session_state:
-        st.session_state["cp_floor_wing"] = selected_wing
+    for wing in wings:
+        levels = _level_progress_rows(floor_df, flat_df, wing, floor_col_map, flat_col_map)
+        floor_items = []
+        wing_floor_df = floor_df[floor_df.apply(_wing_value, axis=1) == wing].copy()
 
-    wing = st.session_state.get("cp_floor_wing", wings[0])
-    levels = _level_progress_rows(floor_df, flat_df, wing, floor_col_map, flat_col_map)
+        for _, row in levels.iterrows():
+            pct = float(row["Progress %"])
+            floor_match = wing_floor_df[wing_floor_df.apply(_level_label, axis=1) == row["Level"]]
 
-    if levels.empty:
-        st.info("No floor progress found for this wing.")
-        return
+            if floor_match.empty:
+                report = pd.DataFrame()
+            else:
+                floor_row = floor_match.iloc[0]
+                floor_flats = _floor_flat_rows(flat_df, wing, _floor_no(floor_row))
+                report = _work_progress_for_level(floor_row, floor_flats, floor_col_map, flat_col_map)
+                report["Progress %"] = report["Progress %"].round(1)
 
-    floor_items = []
-    wing_floor_df = floor_df[floor_df.apply(_wing_value, axis=1) == wing].copy()
+            floor_items.append({
+                "level": row["Level"],
+                "progress": pct,
+                "days": _fmt_days(row["Days Difference"]),
+                "color": _progress_color(pct),
+                "report": report.to_dict("records") if not report.empty else [],
+            })
 
-    for _, row in levels.iterrows():
-        pct = float(row["Progress %"])
-        floor_match = wing_floor_df[wing_floor_df.apply(_level_label, axis=1) == row["Level"]]
+        data_by_wing[wing] = floor_items
 
-        if floor_match.empty:
-            report = pd.DataFrame()
-        else:
-            floor_row = floor_match.iloc[0]
-            floor_flats = _floor_flat_rows(flat_df, wing, _floor_no(floor_row))
-            report = _work_progress_for_level(floor_row, floor_flats, floor_col_map, flat_col_map)
-            report["Progress %"] = report["Progress %"].round(1)
-
-        floor_items.append({
-            "level": row["Level"],
-            "progress": pct,
-            "days": _fmt_days(row["Days Difference"]),
-            "color": _progress_color(pct),
-            "report": report.to_dict("records") if not report.empty else [],
-        })
-
-    _render_clickable_floor_chart(floor_items, f"Wing {wing} Floor Progress")
+    _render_clickable_floor_chart(data_by_wing, "Floor-wise Progress")
 
 
 def _render_flatwise(flat_df, flat_col_map, wings):
@@ -1571,50 +1724,37 @@ def _render_flatwise(flat_df, flat_col_map, wings):
         st.warning("No flat progress rows found.")
         return
 
-    with st.form("cp_flat_view_form", clear_on_submit=False):
-        selected_wing = st.selectbox(
-            "Select Wing",
-            wings,
-            index=wings.index(st.session_state.get("cp_flat_view_wing", wings[0])) if st.session_state.get("cp_flat_view_wing") in wings else 0,
-        )
-        show = st.form_submit_button("Show Flat Progress", use_container_width=True)
+    data_by_wing = {}
 
-    if show or "cp_flat_view_wing" not in st.session_state:
-        st.session_state["cp_flat_view_wing"] = selected_wing
+    for wing in wings:
+        progress_df = _flat_progress_rows(flat_df, wing, flat_col_map)
+        flat_df_local = flat_df[flat_df.apply(_wing_value, axis=1) == wing].copy()
+        key_to_row = {_row_key(row): row for _, row in flat_df_local.iterrows()}
+        flat_items = []
 
-    wing = st.session_state.get("cp_flat_view_wing", wings[0])
-    progress_df = _flat_progress_rows(flat_df, wing, flat_col_map)
+        for _, row in progress_df.sort_values(["Floor No", "Flat"], ascending=[False, True]).iterrows():
+            selected_row = key_to_row.get(row["Row Key"])
+            if selected_row is None:
+                continue
 
-    if progress_df.empty:
-        st.info("No flat progress found for this wing.")
-        return
+            pct = float(row["Progress %"])
+            flat_name = str(row["Flat"])
+            flat_short = flat_name.replace(f"{wing} ", "").split("(")[0].strip()
+            report_df = _flat_report_df(selected_row, flat_col_map)
 
-    flat_df_local = flat_df[flat_df.apply(_wing_value, axis=1) == wing].copy()
-    key_to_row = {_row_key(row): row for _, row in flat_df_local.iterrows()}
+            flat_items.append({
+                "key": row["Row Key"],
+                "floor": int(row["Floor No"]) if pd.notna(row["Floor No"]) else "",
+                "flat": flat_name,
+                "flatShort": flat_short,
+                "progress": pct,
+                "color": _progress_color(pct),
+                "report": report_df.to_dict("records"),
+            })
 
-    flat_items = []
+        data_by_wing[wing] = flat_items
 
-    for _, row in progress_df.sort_values(["Floor No", "Flat"], ascending=[False, True]).iterrows():
-        selected_row = key_to_row.get(row["Row Key"])
-        if selected_row is None:
-            continue
-
-        pct = float(row["Progress %"])
-        flat_name = str(row["Flat"])
-        flat_short = flat_name.replace(f"{wing} ", "").split("(")[0].strip()
-        report_df = _flat_report_df(selected_row, flat_col_map)
-
-        flat_items.append({
-            "key": row["Row Key"],
-            "floor": int(row["Floor No"]) if pd.notna(row["Floor No"]) else "",
-            "flat": flat_name,
-            "flatShort": flat_short,
-            "progress": pct,
-            "color": _progress_color(pct),
-            "report": report_df.to_dict("records"),
-        })
-
-    _render_clickable_flat_chart(flat_items, f"Wing {wing} Flat Progress")
+    _render_clickable_flat_chart(data_by_wing, "Flat-wise Progress")
 
 
 def _inject_css():
