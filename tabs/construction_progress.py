@@ -76,6 +76,7 @@ RCC_CHECKPOINTS = [
     _cp("RCC Work", "RCC Work", "Tie patti/ Tie Rod holes filling for Previous slab", "tie_patti_tie_rod_holes_filling_for_previous_slab"),
     _cp("RCC Work", "RCC Work", "Tachya / Hacking as per requirement", "tachya_hacking_as_per_requirement"),
     _cp("RCC Work", "RCC Work", "Grinding / Excess Concrete chipping if any", "grinding_excess_concrete_chipping_if_any"),
+    _cp("RCC Work", "RCC Work", "Podium", "podium"),
     _cp("RCC Work", "RCC Work", "Cleaning and Handover", "cleaning_and_handover"),
 ]
 
@@ -438,13 +439,27 @@ def _is_parking_level(row) -> bool:
     )
 
 
+def _is_ground_or_stilt_level(row) -> bool:
+    label = _level_label(row).strip().lower()
+    code = _level_code(row).strip().lower()
+    floor_no = _floor_no(row)
+
+    return (
+        label in {"ground", "stilt", "ground / stilt"}
+        or code in {"ground", "stilt"}
+        or floor_no == 0
+    )
+
+
 def _active_rcc_checkpoints(row) -> list[Checkpoint]:
     if not _is_parking_level(row):
-        return RCC_CHECKPOINTS
+        return [cp for cp in RCC_CHECKPOINTS if cp.slug != "podium"]
 
     active = []
     for cp in RCC_CHECKPOINTS:
         slug = cp.slug.lower()
+        if slug == "podium" and not _is_ground_or_stilt_level(row):
+            continue
         if any(word in slug for word in PARKING_RCC_SKIP_WORDS):
             continue
         active.append(cp)
@@ -469,7 +484,10 @@ def _safe_key(value: str) -> str:
 def _wing_value(row) -> str:
     for col in ["wing", "Wing"]:
         if col in row and _is_done(row.get(col)):
-            return str(row.get(col)).strip().upper()
+            wing = str(row.get(col)).strip().upper()
+            wing = re.sub(r"\s*WING\s*$", "", wing).strip()
+            wing = re.sub(r"^WING\s*", "", wing).strip()
+            return wing
     return ""
 
 
@@ -491,6 +509,13 @@ def _flat_label(row) -> str:
     if unit_type:
         label = f"{label} ({unit_type})"
     return label or "-"
+
+
+def _flat_short_label_from_name(flat_name: str, wing: str) -> str:
+    label = str(flat_name or "").replace(f"{wing} ", "", 1).split("(")[0].strip()
+    if label.upper() in {"COMMON", "COMMON AREA"}:
+        return "Common"
+    return label
 
 
 def _row_progress(row, checkpoints: list[Checkpoint], col_map: dict[Checkpoint, str | None]) -> tuple[int, int, float]:
@@ -536,6 +561,9 @@ def _work_progress_for_level(
         "Total": total,
         "Progress %": pct,
     })
+
+    if _is_parking_level(floor_row):
+        return pd.DataFrame(rows)
 
     for heading, checkpoints in FLAT_CHECKPOINT_GROUPS.items():
         total = 0
@@ -608,7 +636,7 @@ def _level_progress_rows(
         progress = _overall_progress_from_work(work_df)
 
         dates = _date_values_for_row(floor_row, _active_rcc_checkpoints(floor_row), floor_col_map)
-        if not level_flats.empty:
+        if not _is_parking_level(floor_row) and not level_flats.empty:
             for _, flat_row in level_flats.iterrows():
                 dates.extend(_date_values_for_row(flat_row, FLAT_CHECKPOINTS, flat_col_map))
 
@@ -1358,13 +1386,15 @@ def _render_clickable_flat_chart(data_by_wing: dict[str, list[dict]], title: str
       .cp-kpi strong{{display:block;font-size:24px;margin-top:5px;}}
       .cp-flat-grid{{max-width:1180px;margin:0 auto 16px;border:3px solid #111827;background:#fff;box-shadow:0 18px 42px rgba(15,23,42,.12);}}
       .cp-wing-title{{background:#e5e7eb;border-bottom:2px solid #111827;text-align:center;font-size:25px;font-weight:900;padding:8px;text-decoration:underline;}}
-      .cp-flat-row{{display:grid;grid-template-columns:repeat(10,1fr);gap:0;border-bottom:2px solid #111827;}}
-      .cp-flat-cell{{position:relative;min-height:58px;border-right:2px solid #111827;background:#f6c343;overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center;text-align:center;transition:.12s ease;}}
-      .cp-flat-cell:nth-child(10n){{border-right:0;}}
+      .cp-flat-row{{display:grid;grid-template-columns:repeat(11,1fr);gap:0;border-bottom:2px solid #111827;}}
+      .cp-flat-cell{{position:relative;min-height:58px;border-right:2px solid #111827;background:#e0f2fe;color:#0f172a;overflow:hidden;cursor:pointer;display:flex;align-items:center;justify-content:center;text-align:center;transition:.12s ease;}}
+      .cp-flat-cell:nth-child(11n){{border-right:0;}}
       .cp-flat-cell:hover{{filter:brightness(.96);outline:4px solid #2563eb;outline-offset:-4px;}}
-      .cp-flat-cell.done{{background:#078d00;color:#fff;}}
-      .cp-flat-cell.mid{{background:#f6c343;color:#111827;}}
-      .cp-flat-cell.low{{background:#ef4444;color:#fff;}}
+      .cp-flat-cell.done{{background:#16a34a;color:#fff;}}
+      .cp-flat-cell.high{{background:#22c55e;color:#fff;}}
+      .cp-flat-cell.mid{{background:#bae6fd;color:#075985;}}
+      .cp-flat-cell.low{{background:#e2e8f0;color:#334155;}}
+      .cp-flat-cell.common{{background:#ede9fe;color:#5b21b6;}}
       .cp-flat-text strong{{font-size:18px;font-weight:1000;display:block;line-height:1.05;}}
       .cp-flat-text span{{font-size:12px;font-weight:900;display:block;margin-top:3px;}}
       .cp-modal{{position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:18px;}}
@@ -1418,8 +1448,9 @@ def _render_clickable_flat_chart(data_by_wing: dict[str, list[dict]], title: str
       }}
 
       function statusClass(p){{
-        if (p >= 90) return "done";
-        if (p >= 35) return "mid";
+        if (p >= 100) return "done";
+        if (p >= 70) return "high";
+        if (p >= 30) return "mid";
         return "low";
       }}
 
@@ -1440,7 +1471,7 @@ def _render_clickable_flat_chart(data_by_wing: dict[str, list[dict]], title: str
           row.className = "cp-flat-row";
           cells.sort((a,b) => String(a.flatShort).localeCompare(String(b.flatShort))).forEach(item => {{
             const cell = document.createElement("div");
-            cell.className = `cp-flat-cell ${{statusClass(Number(item.progress || 0))}}`;
+            cell.className = `cp-flat-cell ${{statusClass(Number(item.progress || 0))}}${{item.isCommon ? " common" : ""}}`;
             cell.onclick = () => openReport(item);
             cell.innerHTML = `<div class="cp-flat-text"><strong>${{item.flatShort}}</strong><span>${{Math.round(item.progress)}}%</span></div>`;
             row.appendChild(cell);
@@ -1528,10 +1559,11 @@ def _render_consumption_chart(data_by_wing: dict[str, list[dict]], title: str):
       .cp-kpi strong{{display:block;font-size:24px;margin-top:5px;}}
       .cp-cons-grid{{max-width:1180px;margin:0 auto 16px;border:3px solid #111827;background:#fff;box-shadow:0 18px 42px rgba(15,23,42,.12);}}
       .cp-wing-title{{background:#e5e7eb;border-bottom:2px solid #111827;text-align:center;font-size:25px;font-weight:900;padding:8px;text-decoration:underline;}}
-      .cp-cons-row{{display:grid;grid-template-columns:repeat(10,1fr);gap:0;border-bottom:2px solid #111827;}}
-      .cp-cons-cell{{min-height:72px;border-right:2px solid #111827;background:#f6c343;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:3px;padding:5px;}}
-      .cp-cons-cell:nth-child(10n){{border-right:0;}}
-      .cp-cons-cell.has{{background:#078d00;color:#fff;}}
+      .cp-cons-row{{display:grid;grid-template-columns:repeat(11,1fr);gap:0;border-bottom:2px solid #111827;}}
+      .cp-cons-cell{{min-height:72px;border-right:2px solid #111827;background:#e2e8f0;color:#334155;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:3px;padding:5px;}}
+      .cp-cons-cell:nth-child(11n){{border-right:0;}}
+      .cp-cons-cell.has{{background:#16a34a;color:#fff;}}
+      .cp-cons-cell.common{{background:#ede9fe;color:#5b21b6;}}
       .cp-cons-flat{{font-size:14px;font-weight:1000;}}
       .cp-cons-val{{font-size:12px;font-weight:900;}}
       .cp-cons-sub{{font-size:11px;font-weight:800;}}
@@ -1580,7 +1612,7 @@ def _render_consumption_chart(data_by_wing: dict[str, list[dict]], title: str):
           row.className = "cp-cons-row";
           rowCells.sort((a,b) => String(a.flatShort).localeCompare(String(b.flatShort))).forEach(item => {{
             const cell = document.createElement("div");
-            cell.className = "cp-cons-cell" + (item.hasValue ? " has" : "");
+            cell.className = "cp-cons-cell" + (item.hasValue ? " has" : "") + (item.isCommon ? " common" : "");
             cell.innerHTML = `
               <div class="cp-cons-flat">${{item.flatShort}}</div>
               <div class="cp-cons-val">${{item.valueOne}}</div>
@@ -1655,7 +1687,7 @@ def _render_consumption_tab(flat_df, wings):
                 continue
 
             flat_name = _flat_label(row)
-            flat_short = flat_name.replace(f"{wing} ", "").split("(")[0].strip()
+            flat_short = _flat_short_label_from_name(flat_name, wing)
             values = []
 
             for field in fields:
@@ -1671,6 +1703,7 @@ def _render_consumption_tab(flat_df, wings):
                 "valueOne": values[0],
                 "valueTwo": values[1],
                 "hasValue": any(v != "-" for v in values),
+                "isCommon": flat_short.lower() == "common",
             })
 
         data_by_wing[wing] = items
@@ -1739,7 +1772,7 @@ def _render_flatwise(flat_df, flat_col_map, wings):
 
             pct = float(row["Progress %"])
             flat_name = str(row["Flat"])
-            flat_short = flat_name.replace(f"{wing} ", "").split("(")[0].strip()
+            flat_short = _flat_short_label_from_name(flat_name, wing)
             report_df = _flat_report_df(selected_row, flat_col_map)
 
             flat_items.append({
@@ -1749,6 +1782,7 @@ def _render_flatwise(flat_df, flat_col_map, wings):
                 "flatShort": flat_short,
                 "progress": pct,
                 "color": _progress_color(pct),
+                "isCommon": flat_short.lower() == "common",
                 "report": report_df.to_dict("records"),
             })
 
@@ -1954,7 +1988,7 @@ def render_construction_progress_tab(supabase_client):
         if not wings:
             st.warning("No construction progress data found.")
         else:
-            dash_tabs = st.tabs(["All Wings"] + [f"Wing {w}" for w in wings])
+            dash_tabs = st.tabs(["All Wings"] + [f"{w} Wing" for w in wings])
             with dash_tabs[0]:
                 _render_dashboard_panel(floor_df, flat_df, floor_col_map, flat_col_map, None)
 
