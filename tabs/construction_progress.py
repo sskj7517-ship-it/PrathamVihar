@@ -716,8 +716,13 @@ def _update_row(supabase_client, table_name: str, row, payload: dict):
     return query.execute()
 
 
-def _save_checkpoints(supabase_client, table_name: str, row, checkpoints, col_map, form_prefix: str):
-    today = _dt.date.today().isoformat()
+def _save_checkpoints(supabase_client, table_name: str, row, checkpoints, col_map, form_prefix: str, selected_date=None):
+    save_date = selected_date or _dt.date.today()
+    if hasattr(save_date, "isoformat"):
+        save_date_value = save_date.isoformat()
+    else:
+        save_date_value = str(save_date)
+
     payload = {}
     missing = []
 
@@ -732,7 +737,7 @@ def _save_checkpoints(supabase_client, table_name: str, row, checkpoints, col_ma
         current_done = _is_done(row.get(col))
 
         if checked and not current_done:
-            payload[col] = today
+            payload[col] = save_date_value
         elif (not checked) and current_done:
             payload[col] = None
 
@@ -1070,6 +1075,13 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
 
     with st.form("cp_rcc_save_form", clear_on_submit=False):
         st.markdown(f"#### {active_wing} Wing - {active_slab}")
+        selected_work_date = st.date_input(
+            "Work Done Date",
+            value=st.session_state.get("cp_rcc_work_done_date", _dt.date.today()),
+            key="cp_rcc_work_done_date",
+            help="Use this date for newly checked RCC checkpoints.",
+        )
+
         for cp in active_cps:
             col = floor_col_map.get(cp)
             current = selected_row.get(col) if col else None
@@ -1082,7 +1094,15 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
         save = st.form_submit_button("Save RCC Progress", type="primary", use_container_width=True)
 
     if save:
-        _save_checkpoints(supabase_client, FLOOR_TABLE, selected_row, active_cps, floor_col_map, form_prefix)
+        _save_checkpoints(
+            supabase_client,
+            FLOOR_TABLE,
+            selected_row,
+            active_cps,
+            floor_col_map,
+            form_prefix,
+            selected_work_date,
+        )
 
 
 def _render_consumption_popover(row, cp: Checkpoint, form_prefix: str):
