@@ -1041,15 +1041,46 @@ def _render_flatwise(flat_df, flat_col_map, wings):
 
     floors = sorted([f for f in progress_df["Floor No"].dropna().unique().tolist()], reverse=True)
 
+    st.markdown(
+        f"""
+        <div class="cp-flat-building-shell">
+            <div class="cp-flat-building-title">Wing {wing} Flat Progress</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     for floor in floors:
-        st.markdown(f"#### Floor {int(floor)}")
         floor_progress = progress_df[progress_df["Floor No"] == floor].sort_values("Flat")
-        cols = st.columns(10)
+        st.markdown("<div class='cp-flat-floor-band'>", unsafe_allow_html=True)
+        label_col, *flat_cols = st.columns([0.95, *([1] * 10)], gap="small")
+
+        with label_col:
+            st.markdown(
+                f"<div class='cp-flat-floor-label'>Floor<br>{int(floor)}</div>",
+                unsafe_allow_html=True,
+            )
+
         for idx, (_, row) in enumerate(floor_progress.iterrows()):
             pct = float(row["Progress %"])
-            button_label = f"{row['Flat']}\n{pct:.0f}%"
-            if cols[idx % 10].button(button_label, key=f"cp_flat_btn_{wing}_{floor}_{idx}_{row['Row Key']}", use_container_width=True):
+            color = _progress_color(pct)
+            flat_name = str(row["Flat"]).replace(f"{wing} ", "").split("(")[0].strip()
+            with flat_cols[idx % 10]:
+                st.markdown(
+                    f"""
+                    <div class="cp-flat-cell-preview" style="border-color:{color};">
+                        <div class="cp-flat-cell-fill" style="width:{max(0, min(pct, 100))}%; background:{color};"></div>
+                        <div class="cp-flat-cell-text">
+                            <strong>{flat_name}</strong>
+                            <span>{pct:.0f}%</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            if flat_cols[idx % 10].button("Report", key=f"cp_flat_btn_{wing}_{floor}_{idx}_{row['Row Key']}", use_container_width=True):
                 st.session_state["cp_selected_flat_report_key"] = row["Row Key"]
+        st.markdown("</div>", unsafe_allow_html=True)
 
     selected_key = st.session_state.get("cp_selected_flat_report_key")
     if selected_key not in key_to_row and key_to_row:
@@ -1060,7 +1091,6 @@ def _render_flatwise(flat_df, flat_col_map, wings):
         selected_row = key_to_row[selected_key]
         st.markdown(f"### Detailed Flat Report - {_flat_label(selected_row)}")
         report_df = _flat_report_df(selected_row, flat_col_map)
-        st.dataframe(report_df, use_container_width=True, hide_index=True)
 
         group_summary = (
             report_df.assign(Done=report_df["Status"].eq("Done").astype(int), Total=1)
@@ -1068,6 +1098,42 @@ def _render_flatwise(flat_df, flat_col_map, wings):
             .agg(Done=("Done", "sum"), Total=("Total", "sum"))
         )
         group_summary["Progress %"] = (group_summary["Done"] / group_summary["Total"] * 100).round(1)
+
+        c1, c2, c3 = st.columns(3)
+        done_count = int((report_df["Status"] == "Done").sum())
+        total_count = int(len(report_df))
+        pending_count = total_count - done_count
+
+        with c1:
+            _card("Checkpoints Done", f"{done_count}/{total_count}", "Selected flat")
+        with c2:
+            _card("Flat Progress", _fmt_pct((done_count / total_count * 100) if total_count else 0), "All detailed checkpoints")
+        with c3:
+            _card("Pending Checkpoints", _fmt_int(pending_count), "Remaining work items")
+
+        st.markdown("#### Detailed Checkpoints")
+
+        for heading in FLAT_CHECKPOINT_GROUPS.keys():
+            heading_df = report_df[report_df["Main Work"] == heading].copy()
+            if heading_df.empty:
+                continue
+
+            heading_done = int((heading_df["Status"] == "Done").sum())
+            heading_total = int(len(heading_df))
+            heading_pct = (heading_done / heading_total * 100) if heading_total else 0
+
+            with st.expander(f"{heading} - {heading_done}/{heading_total} ({heading_pct:.0f}%)", expanded=True):
+                for section in dict.fromkeys(heading_df["Section"].tolist()):
+                    section_df = heading_df[heading_df["Section"] == section].copy()
+                    if section != heading:
+                        st.markdown(f"**{section}**")
+
+                    st.dataframe(
+                        section_df[["Checkpoint", "Status", "Date"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
         st.markdown("#### Section Summary")
         st.dataframe(group_summary, use_container_width=True, hide_index=True)
 
@@ -1162,6 +1228,80 @@ def _inject_css():
             color:#334155;
             font-weight:800;
             text-align:right;
+        }
+        .cp-flat-building-shell{
+            max-width:1180px;
+            margin:8px auto 4px;
+            padding:12px 16px;
+            border-radius:14px 14px 4px 4px;
+            background:#334155;
+            color:#fff;
+            box-shadow:0 12px 26px rgba(15,23,42,.12);
+        }
+        .cp-flat-building-title{
+            text-align:center;
+            font-size:16px;
+            font-weight:900;
+            letter-spacing:.03em;
+            text-transform:uppercase;
+        }
+        .cp-flat-floor-band{
+            max-width:1180px;
+            margin:0 auto;
+            padding:8px 10px;
+            border-left:4px solid #94a3b8;
+            border-right:4px solid #94a3b8;
+            border-bottom:1px solid #cbd5e1;
+            background:linear-gradient(90deg,#f1f5f9 0,#fff 6%,#fff 94%,#f1f5f9 100%);
+        }
+        .cp-flat-floor-label{
+            min-height:58px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            text-align:center;
+            border-radius:8px;
+            background:#e2e8f0;
+            color:#0f172a;
+            font-size:12px;
+            font-weight:900;
+            line-height:1.15;
+        }
+        .cp-flat-cell-preview{
+            position:relative;
+            min-height:58px;
+            border:2px solid #cbd5e1;
+            border-radius:8px;
+            overflow:hidden;
+            background:#f8fafc;
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.65);
+        }
+        .cp-flat-cell-fill{
+            position:absolute;
+            left:0;
+            top:0;
+            bottom:0;
+            opacity:.18;
+        }
+        .cp-flat-cell-text{
+            position:absolute;
+            inset:0;
+            display:flex;
+            flex-direction:column;
+            align-items:center;
+            justify-content:center;
+            gap:3px;
+            color:#0f172a;
+            text-align:center;
+        }
+        .cp-flat-cell-text strong{
+            font-size:13px;
+            font-weight:900;
+        }
+        .cp-flat-cell-text span{
+            font-size:12px;
+            font-weight:900;
+            color:#475569;
         }
         </style>
         """,
