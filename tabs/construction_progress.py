@@ -861,6 +861,57 @@ def _flat_report_df(row, flat_col_map) -> pd.DataFrame:
     return _checkpoint_table(row, FLAT_CHECKPOINTS, flat_col_map)
 
 
+def _floor_detailed_report_df(floor_row, floor_flats: pd.DataFrame, floor_col_map, flat_col_map) -> pd.DataFrame:
+    rows = []
+
+    for cp in _active_rcc_checkpoints(floor_row):
+        col = floor_col_map.get(cp)
+        value = floor_row.get(col) if col else None
+        done = 1 if _is_done(value) else 0
+        rows.append({
+            "Main Work": cp.heading,
+            "Section": cp.section,
+            "Checkpoint": cp.label,
+            "Done": done,
+            "Total": 1,
+            "Progress %": 100.0 if done else 0.0,
+            "Latest Date": _date_label(value),
+        })
+
+    if _is_structure_only_level(floor_row) or floor_flats is None or floor_flats.empty:
+        return pd.DataFrame(rows)
+
+    for heading, checkpoints in FLAT_CHECKPOINT_GROUPS.items():
+        for cp in checkpoints:
+            col = flat_col_map.get(cp)
+            if not col:
+                continue
+
+            done_count = 0
+            latest_date = pd.NaT
+            total_count = len(floor_flats)
+
+            for _, flat_row in floor_flats.iterrows():
+                value = flat_row.get(col)
+                if _is_done(value):
+                    done_count += 1
+                    d = _parse_date(value)
+                    if pd.notna(d) and (pd.isna(latest_date) or d > latest_date):
+                        latest_date = d
+
+            rows.append({
+                "Main Work": heading,
+                "Section": cp.section,
+                "Checkpoint": cp.label,
+                "Done": done_count,
+                "Total": total_count,
+                "Progress %": 0.0 if total_count == 0 else round((done_count / total_count) * 100, 1),
+                "Latest Date": _date_label(latest_date),
+            })
+
+    return pd.DataFrame(rows)
+
+
 def _slab_casting_rows(floor_df: pd.DataFrame, floor_col_map, wing: str | None = None) -> pd.DataFrame:
     pour_cp = next((cp for cp in RCC_CHECKPOINTS if cp.slug == "pour_casting_as_per_drawing"), None)
     pour_col = floor_col_map.get(pour_cp) if pour_cp else None
@@ -1384,9 +1435,16 @@ def _render_clickable_floor_chart(data_by_wing: dict[str, list[dict]], title: st
     html = f"""
     <div id="cpFloorApp" class="cp-iframe-shell">
       <div class="cp-topbar">
-        <div class="cp-iframe-heading">{escape(title)}</div>
-        <div id="floorWingBtns" class="cp-wing-buttons"></div>
+        <div>
+          <div class="cp-iframe-heading">{escape(title)}</div>
+          <div class="cp-iframe-sub">Click any floor to open detailed checkpoint progress.</div>
+        </div>
+        <div class="cp-topbar-actions">
+          <div id="floorWingBtns" class="cp-wing-buttons"></div>
+          <button id="floorFullscreen" class="cp-fullscreen-btn">Open Full Screen</button>
+        </div>
       </div>
+      <div id="floorKpis" class="cp-floor-kpis"></div>
       <div id="floorGrid" class="cp-iframe-building"></div>
       <div id="floorModal" class="cp-modal hidden">
         <div class="cp-modal-card">
@@ -1399,37 +1457,50 @@ def _render_clickable_floor_chart(data_by_wing: dict[str, list[dict]], title: st
     <style>
       body{{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#0f172a;}}
       .cp-iframe-shell{{padding:8px 8px 18px;}}
-      .cp-topbar{{max-width:1180px;margin:0 auto 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}}
-      .cp-iframe-heading{{font-size:26px;font-weight:900;color:#111827;}}
+      .cp-iframe-shell:fullscreen{{background:#f8fafc;overflow:auto;padding:18px;}}
+      .cp-topbar{{max-width:1180px;margin:0 auto 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}}
+      .cp-topbar-actions{{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;}}
+      .cp-iframe-heading{{font-size:28px;font-weight:1000;color:#0f172a;letter-spacing:-.01em;}}
+      .cp-iframe-sub{{font-size:13px;color:#64748b;font-weight:750;margin-top:3px;}}
       .cp-wing-buttons{{display:flex;gap:8px;flex-wrap:wrap;}}
-      .cp-wing-btn{{border:0;border-radius:10px;background:#e2e8f0;color:#1e293b;font-weight:900;padding:10px 18px;cursor:pointer;font-size:15px;}}
-      .cp-wing-btn.active{{background:#2f80bd;color:#fff;}}
-      .cp-iframe-building{{max-width:980px;margin:0 auto 16px;border-left:5px solid #111827;border-right:5px solid #111827;border-bottom:5px solid #111827;background:linear-gradient(90deg,#f1f5f9 0,#fff 7%,#fff 93%,#f1f5f9 100%);box-shadow:0 18px 42px rgba(15,23,42,.12);}}
-      .cp-building-title{{background:#e5e7eb;border-bottom:3px solid #111827;text-align:center;font-size:24px;font-weight:900;padding:8px;text-decoration:underline;}}
-      .cp-iframe-floor{{display:grid;grid-template-columns:130px 1fr 96px;gap:10px;align-items:center;padding:8px 12px;border-bottom:2px solid #111827;cursor:pointer;transition:.15s ease;}}
-      .cp-iframe-floor:hover{{background:#eff6ff;}}
-      .cp-iframe-floor-label{{font-size:14px;font-weight:900;}}
-      .cp-iframe-floor-bar{{height:34px;position:relative;border:2px solid #111827;overflow:hidden;background:repeating-linear-gradient(90deg,#f8fafc 0,#f8fafc 22px,#e2e8f0 23px,#e2e8f0 24px);}}
-      .cp-iframe-floor-fill{{position:absolute;inset:0 auto 0 0;opacity:.85;}}
-      .cp-iframe-floor-pct{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;color:#111827;}}
-      .cp-iframe-days{{font-size:12px;font-weight:800;text-align:right;color:#334155;}}
+      .cp-wing-btn,.cp-fullscreen-btn{{border:0;border-radius:10px;background:#e2e8f0;color:#1e293b;font-weight:900;padding:10px 15px;cursor:pointer;font-size:14px;}}
+      .cp-wing-btn.active{{background:#2563eb;color:#fff;box-shadow:0 8px 18px rgba(37,99,235,.22);}}
+      .cp-fullscreen-btn{{background:#0f172a;color:#fff;}}
+      .cp-floor-kpis{{max-width:1180px;margin:0 auto 14px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}}
+      .cp-floor-kpi{{border:1px solid #e2e8f0;border-radius:13px;padding:13px 16px;background:#fff;box-shadow:0 8px 24px rgba(15,23,42,.06);}}
+      .cp-floor-kpi span{{display:block;font-size:12px;color:#64748b;font-weight:900;text-transform:uppercase;letter-spacing:.03em;}}
+      .cp-floor-kpi strong{{display:block;font-size:25px;margin-top:4px;color:#0f172a;}}
+      .cp-iframe-building{{max-width:940px;margin:0 auto 16px;border-radius:20px 20px 8px 8px;background:#fff;box-shadow:0 24px 58px rgba(15,23,42,.16);border:1px solid #cbd5e1;overflow:hidden;}}
+      .cp-building-roof{{height:28px;background:linear-gradient(135deg,#334155,#0f172a);clip-path:polygon(7% 100%,93% 100%,84% 0,16% 0);}}
+      .cp-building-title{{background:#f8fafc;border-bottom:1px solid #cbd5e1;text-align:center;font-size:24px;font-weight:1000;padding:11px;color:#0f172a;}}
+      .cp-iframe-floor{{display:grid;grid-template-columns:145px 1fr 105px;gap:12px;align-items:center;padding:9px 14px;border-bottom:1px solid #cbd5e1;cursor:pointer;transition:.15s ease;background:linear-gradient(90deg,#f8fafc 0,#fff 8%,#fff 92%,#f8fafc 100%);}}
+      .cp-iframe-floor:hover{{background:#eff6ff;transform:translateX(2px);}}
+      .cp-iframe-floor-label{{font-size:14px;font-weight:1000;color:#0f172a;}}
+      .cp-iframe-floor-bar{{height:38px;position:relative;border:1px solid #94a3b8;border-radius:9px;overflow:hidden;background:repeating-linear-gradient(90deg,#f8fafc 0,#f8fafc 28px,#e2e8f0 29px,#e2e8f0 30px);}}
+      .cp-iframe-floor-fill{{position:absolute;inset:0 auto 0 0;opacity:.78;}}
+      .cp-iframe-floor-pct{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:1000;color:#0f172a;text-shadow:0 1px 0 rgba(255,255,255,.55);}}
+      .cp-iframe-days{{font-size:12px;font-weight:900;text-align:right;color:#334155;}}
       .cp-modal{{position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:18px;}}
       .cp-modal.hidden{{display:none;}}
-      .cp-modal-card{{position:relative;width:min(960px,96vw);max-height:86vh;overflow:auto;background:#fff;border-radius:14px;box-shadow:0 26px 80px rgba(0,0,0,.34);}}
+      .cp-modal-card{{position:relative;width:min(1160px,96vw);max-height:86vh;overflow:auto;background:#fff;border-radius:14px;box-shadow:0 26px 80px rgba(0,0,0,.34);}}
       .cp-modal-close{{position:sticky;top:10px;float:right;margin:10px 10px 0 0;width:34px;height:34px;border:0;border-radius:999px;background:#0f172a;color:#fff;font-size:24px;line-height:1;cursor:pointer;z-index:2;}}
       .cp-report-head{{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8fafc;padding:18px 20px;border-bottom:1px solid #e2e8f0;font-weight:900;font-size:18px;}}
-      table{{width:100%;border-collapse:collapse;font-size:14px;}}
+      .cp-report-section{{background:#ecfeff;color:#155e75;font-weight:1000;padding:10px 12px;border-top:1px solid #cffafe;border-bottom:1px solid #cffafe;}}
+      table{{width:100%;border-collapse:collapse;font-size:13px;}}
       th{{background:#0f766e;color:#fff;text-align:left;padding:10px 12px;}}
       td{{border-bottom:1px solid #e2e8f0;padding:10px 12px;}}
       tr:last-child td{{border-bottom:0;}}
       .ta-r{{text-align:right;}}
+      @media(max-width:860px){{.cp-floor-kpis{{grid-template-columns:repeat(2,minmax(0,1fr));}}.cp-iframe-floor{{grid-template-columns:110px 1fr;}}.cp-iframe-days{{grid-column:2;text-align:left;}}}}
     </style>
 
     <script>
       const dataByWing = {_json_data(data_by_wing)};
       const wings = Object.keys(dataByWing);
       const wingBtns = document.getElementById("floorWingBtns");
+      const kpis = document.getElementById("floorKpis");
       const grid = document.getElementById("floorGrid");
+      const fullBtn = document.getElementById("floorFullscreen");
       const modal = document.getElementById("floorModal");
       const modalClose = document.getElementById("floorModalClose");
       const report = document.getElementById("floorReport");
@@ -1437,6 +1508,11 @@ def _render_clickable_floor_chart(data_by_wing: dict[str, list[dict]], title: st
 
       modalClose.onclick = () => modal.classList.add("hidden");
       modal.onclick = (e) => {{ if (e.target === modal) modal.classList.add("hidden"); }};
+      fullBtn.onclick = async () => {{
+        const shell = document.getElementById("cpFloorApp");
+        if (!document.fullscreenElement && shell.requestFullscreen) await shell.requestFullscreen();
+        else if (document.exitFullscreen) await document.exitFullscreen();
+      }};
 
       function renderWingButtons(){{
         wingBtns.innerHTML = "";
@@ -1451,7 +1527,16 @@ def _render_clickable_floor_chart(data_by_wing: dict[str, list[dict]], title: st
 
       function renderGrid(){{
         const levels = dataByWing[activeWing] || [];
-        grid.innerHTML = `<div class="cp-building-title">${{activeWing}} Wing</div>`;
+        const total = levels.length;
+        const avg = total ? levels.reduce((a,f)=>a+Number(f.progress || 0),0)/total : 0;
+        const complete = levels.filter(f => Number(f.progress || 0) >= 100).length;
+        const active = levels.filter(f => Number(f.progress || 0) > 0 && Number(f.progress || 0) < 100).length;
+        kpis.innerHTML = `
+          <div class="cp-floor-kpi"><span>Total Levels</span><strong>${{total}}</strong></div>
+          <div class="cp-floor-kpi"><span>Completed</span><strong>${{complete}}</strong></div>
+          <div class="cp-floor-kpi"><span>Active</span><strong>${{active}}</strong></div>
+          <div class="cp-floor-kpi"><span>Average</span><strong>${{Math.round(avg)}}%</strong></div>`;
+        grid.innerHTML = `<div class="cp-building-roof"></div><div class="cp-building-title">${{activeWing}} Wing</div>`;
         levels.forEach((item) => {{
           const row = document.createElement("div");
           row.className = "cp-iframe-floor";
@@ -1479,20 +1564,36 @@ def _render_clickable_floor_chart(data_by_wing: dict[str, list[dict]], title: st
         const head = document.createElement("div");
         head.className = "cp-report-head";
         head.innerHTML = `<span>${{activeWing}} Wing - ${{item.level}} Report</span><span>${{Math.round(item.progress)}}%</span>`;
-        const table = document.createElement("table");
-        table.innerHTML = "<thead><tr><th>Main Work</th><th class='ta-r'>Done</th><th class='ta-r'>Total</th><th class='ta-r'>Progress</th></tr></thead>";
-        const tbody = document.createElement("tbody");
-        (item.report || []).forEach(r => {{
-          const tr = document.createElement("tr");
-          tr.appendChild(cell(r["Main Work"]));
-          tr.appendChild(cell(r["Done"], "ta-r"));
-          tr.appendChild(cell(r["Total"], "ta-r"));
-          tr.appendChild(cell(`${{Number(r["Progress %"] || 0).toFixed(1)}}%`, "ta-r"));
-          tbody.appendChild(tr);
-        }});
-        table.appendChild(tbody);
         wrap.appendChild(head);
-        wrap.appendChild(table);
+        const byMain = new Map();
+        (item.report || []).forEach(r => {{
+          const key = r["Main Work"] || "Other";
+          if (!byMain.has(key)) byMain.set(key, []);
+          byMain.get(key).push(r);
+        }});
+        byMain.forEach((rows, mainWork) => {{
+          const section = document.createElement("div");
+          section.className = "cp-report-section";
+          const done = rows.reduce((a,r)=>a+Number(r.Done || 0),0);
+          const total = rows.reduce((a,r)=>a+Number(r.Total || 0),0);
+          section.textContent = `${{mainWork}} - ${{done}}/${{total}}`;
+          wrap.appendChild(section);
+          const table = document.createElement("table");
+          table.innerHTML = "<thead><tr><th>Section</th><th>Checkpoint</th><th class='ta-r'>Done</th><th class='ta-r'>Total</th><th class='ta-r'>Progress</th><th>Latest Date</th></tr></thead>";
+          const tbody = document.createElement("tbody");
+          rows.forEach(r => {{
+            const tr = document.createElement("tr");
+            tr.appendChild(cell(r.Section));
+            tr.appendChild(cell(r.Checkpoint));
+            tr.appendChild(cell(r.Done, "ta-r"));
+            tr.appendChild(cell(r.Total, "ta-r"));
+            tr.appendChild(cell(`${{Number(r["Progress %"] || 0).toFixed(1)}}%`, "ta-r"));
+            tr.appendChild(cell(r["Latest Date"]));
+            tbody.appendChild(tr);
+          }});
+          table.appendChild(tbody);
+          wrap.appendChild(table);
+        }});
         report.innerHTML = "";
         report.appendChild(wrap);
         modal.classList.remove("hidden");
@@ -1510,7 +1611,10 @@ def _render_clickable_flat_chart(data_by_wing: dict[str, list[dict]], title: str
     <div id="cpFlatApp" class="cp-flat-shell">
       <div class="cp-flat-toolbar">
         <div class="cp-flat-heading">{escape(title)}</div>
-        <div id="flatWingBtns" class="cp-wing-buttons"></div>
+        <div class="cp-flat-actions">
+          <div id="flatWingBtns" class="cp-wing-buttons"></div>
+          <button id="flatFullscreen" class="cp-fullscreen-btn">Open Full Screen</button>
+        </div>
       </div>
       <div id="flatKpis" class="cp-kpi-grid"></div>
       <div id="flatGrid" class="cp-flat-grid"></div>
@@ -1525,11 +1629,14 @@ def _render_clickable_flat_chart(data_by_wing: dict[str, list[dict]], title: str
     <style>
       body{{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#0f172a;}}
       .cp-flat-shell{{padding:8px 8px 18px;}}
+      .cp-flat-shell:fullscreen{{background:#f8fafc;overflow:auto;padding:18px;}}
       .cp-flat-toolbar{{max-width:1180px;margin:0 auto 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}}
       .cp-flat-heading{{font-size:26px;font-weight:900;color:#111827;}}
+      .cp-flat-actions{{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;}}
       .cp-wing-buttons{{display:flex;gap:8px;flex-wrap:wrap;}}
-      .cp-wing-btn{{border:0;border-radius:10px;background:#e2e8f0;color:#1e293b;font-weight:900;padding:10px 18px;cursor:pointer;font-size:15px;}}
+      .cp-wing-btn,.cp-fullscreen-btn{{border:0;border-radius:10px;background:#e2e8f0;color:#1e293b;font-weight:900;padding:10px 15px;cursor:pointer;font-size:14px;}}
       .cp-wing-btn.active{{background:#2f80bd;color:#fff;}}
+      .cp-fullscreen-btn{{background:#0f172a;color:#fff;}}
       .cp-kpi-grid{{max-width:1180px;margin:0 auto 14px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}}
       .cp-kpi{{border:1px solid #e2e8f0;border-radius:12px;padding:13px 16px;box-shadow:0 8px 24px rgba(15,23,42,.06);}}
       .cp-kpi span{{display:block;font-size:12px;color:#64748b;font-weight:900;}}
@@ -1568,6 +1675,7 @@ def _render_clickable_flat_chart(data_by_wing: dict[str, list[dict]], title: str
       const wingBtns = document.getElementById("flatWingBtns");
       const kpis = document.getElementById("flatKpis");
       const grid = document.getElementById("flatGrid");
+      const fullBtn = document.getElementById("flatFullscreen");
       const modal = document.getElementById("flatModal");
       const modalClose = document.getElementById("flatModalClose");
       const report = document.getElementById("flatReport");
@@ -1575,6 +1683,11 @@ def _render_clickable_flat_chart(data_by_wing: dict[str, list[dict]], title: str
 
       modalClose.onclick = () => modal.classList.add("hidden");
       modal.onclick = (e) => {{ if (e.target === modal) modal.classList.add("hidden"); }};
+      fullBtn.onclick = async () => {{
+        const shell = document.getElementById("cpFlatApp");
+        if (!document.fullscreenElement && shell.requestFullscreen) await shell.requestFullscreen();
+        else if (document.exitFullscreen) await document.exitFullscreen();
+      }};
 
       function renderWingButtons(){{
         wingBtns.innerHTML = "";
@@ -1689,7 +1802,10 @@ def _render_consumption_chart(data_by_wing: dict[str, list[dict]], title: str):
     <div class="cp-cons-shell">
       <div class="cp-cons-toolbar">
         <div class="cp-cons-heading">{escape(title)}</div>
-        <div id="consWingBtns" class="cp-wing-buttons"></div>
+        <div class="cp-cons-actions">
+          <div id="consWingBtns" class="cp-wing-buttons"></div>
+          <button id="consFullscreen" class="cp-fullscreen-btn">Open Full Screen</button>
+        </div>
       </div>
       <div id="consKpis" class="cp-kpi-grid"></div>
       <div id="consGrid" class="cp-cons-grid"></div>
@@ -1698,11 +1814,14 @@ def _render_consumption_chart(data_by_wing: dict[str, list[dict]], title: str):
     <style>
       body{{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#0f172a;}}
       .cp-cons-shell{{padding:8px 8px 18px;}}
+      .cp-cons-shell:fullscreen{{background:#f8fafc;overflow:auto;padding:18px;}}
       .cp-cons-toolbar{{max-width:1180px;margin:0 auto 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}}
       .cp-cons-heading{{font-size:26px;font-weight:900;color:#111827;}}
+      .cp-cons-actions{{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;}}
       .cp-wing-buttons{{display:flex;gap:8px;flex-wrap:wrap;}}
-      .cp-wing-btn{{border:0;border-radius:10px;background:#e2e8f0;color:#1e293b;font-weight:900;padding:10px 18px;cursor:pointer;font-size:15px;}}
+      .cp-wing-btn,.cp-fullscreen-btn{{border:0;border-radius:10px;background:#e2e8f0;color:#1e293b;font-weight:900;padding:10px 15px;cursor:pointer;font-size:14px;}}
       .cp-wing-btn.active{{background:#2f80bd;color:#fff;}}
+      .cp-fullscreen-btn{{background:#0f172a;color:#fff;}}
       .cp-kpi-grid{{max-width:1180px;margin:0 auto 14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}}
       .cp-kpi{{border:1px solid #e2e8f0;border-radius:12px;padding:13px 16px;box-shadow:0 8px 24px rgba(15,23,42,.06);}}
       .cp-kpi span{{display:block;font-size:12px;color:#64748b;font-weight:900;}}
@@ -1726,7 +1845,13 @@ def _render_consumption_chart(data_by_wing: dict[str, list[dict]], title: str):
       const wingBtns = document.getElementById("consWingBtns");
       const kpis = document.getElementById("consKpis");
       const grid = document.getElementById("consGrid");
+      const fullBtn = document.getElementById("consFullscreen");
       let activeWing = wings[0] || "";
+      fullBtn.onclick = async () => {{
+        const shell = document.querySelector(".cp-cons-shell");
+        if (!document.fullscreenElement && shell.requestFullscreen) await shell.requestFullscreen();
+        else if (document.exitFullscreen) await document.exitFullscreen();
+      }};
 
       function renderWingButtons(){{
         wingBtns.innerHTML = "";
@@ -1884,7 +2009,7 @@ def _render_floorwise(floor_df, flat_df, floor_col_map, flat_col_map, wings):
             else:
                 floor_row = floor_match.iloc[0]
                 floor_flats = _floor_flat_rows(flat_df, wing, _floor_no(floor_row))
-                report = _work_progress_for_level(floor_row, floor_flats, floor_col_map, flat_col_map)
+                report = _floor_detailed_report_df(floor_row, floor_flats, floor_col_map, flat_col_map)
                 report["Progress %"] = report["Progress %"].round(1)
 
             floor_items.append({
