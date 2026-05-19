@@ -3,13 +3,16 @@
 # a root-level construction_progress_tab.py file.
 
 import datetime as _dt
+import json
 import re
 from dataclasses import dataclass
+from html import escape
 
 import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 FLOOR_TABLE = "construction_floor_progress"
@@ -23,6 +26,7 @@ class Checkpoint:
     label: str
     slug: str
     aliases: tuple[str, ...] = ()
+    consumption_kind: str | None = None
 
 
 def _slug(text: str) -> str:
@@ -32,31 +36,31 @@ def _slug(text: str) -> str:
     return s.strip("_")
 
 
-def _cp(heading: str, section: str, label: str, slug: str | None = None, aliases=None) -> Checkpoint:
+def _cp(heading: str, section: str, label: str, slug: str | None = None, aliases=None, consumption_kind=None) -> Checkpoint:
     slug = slug or _slug(label)
-    return Checkpoint(heading, section, label, slug, tuple(aliases or ()))
+    return Checkpoint(heading, section, label, slug, tuple(aliases or ()), consumption_kind)
 
 
-def _prefixed_cp(heading: str, section: str, prefix: str, label: str) -> Checkpoint:
+def _prefixed_cp(heading: str, section: str, prefix: str, label: str, consumption_kind=None, aliases=None) -> Checkpoint:
     base = _slug(label)
     slug = f"{prefix}_{base}"
-    aliases = []
+    aliases = list(aliases or [])
     if base.startswith("2_"):
         aliases.extend([
             f"{prefix}_two_{base[2:]}",
             f"{prefix}__{base}",
         ])
-    return _cp(heading, section, label, slug, aliases)
+    return _cp(heading, section, label, slug, aliases, consumption_kind)
 
 
 RCC_CHECKPOINTS = [
     _cp("RCC Work", "RCC Work", "Line out & wooden thesi", "lineout_wooden_thesi", ["line_out_wooden_thesi", "line_out_and_wooden_thesi"]),
-    _cp("RCC Work", "RCC Work", "Column Steel binding work", "column_steel_binding_work"),
-    _cp("RCC Work", "RCC Work", "Columns Distribution Stirrups", "columns_distribution_stirrups"),
+    _cp("RCC Work", "RCC Work", "Column Steel Checking", "column_steel_checking", ["column_steel_binding_work", "columns_distribution_stirrups"]),
     _cp("RCC Work", "RCC Work", "Beams Reinforcement work", "beams_reinforcement_work"),
-    _cp("RCC Work", "RCC Work", "Aluform Vertical Shuttering work", "aluform_vertical_shuttering_work"),
+    _cp("RCC Work", "RCC Work", "Aluform Level Check", "aluform_level_check"),
+    _cp("RCC Work", "RCC Work", "Aluform Plum Check", "aluform_plum_check"),
+    _cp("RCC Work", "RCC Work", "Aluform Measurement Check", "aluform_measurement_check"),
     _cp("RCC Work", "RCC Work", "Electrical Concealed boxes fixing", "electrical_concealed_boxes_fixing"),
-    _cp("RCC Work", "RCC Work", "Aluform Horizontal shuttering work", "aluform_horizontal_shuttering_work"),
     _cp("RCC Work", "RCC Work", "Slab & Wall Conduit work", "slab_wall_conduit_work", ["slab_and_wall_conduit_work"]),
     _cp("RCC Work", "RCC Work", "Sleeves fixing as per requirements", "sleeves_fixing_as_per_requirements"),
     _cp("RCC Work", "RCC Work", "Slab Reinforcement work", "slab_reinforcement_work"),
@@ -72,6 +76,7 @@ RCC_CHECKPOINTS = [
     _cp("RCC Work", "RCC Work", "Tie patti/ Tie Rod holes filling for Previous slab", "tie_patti_tie_rod_holes_filling_for_previous_slab"),
     _cp("RCC Work", "RCC Work", "Tachya / Hacking as per requirement", "tachya_hacking_as_per_requirement"),
     _cp("RCC Work", "RCC Work", "Grinding / Excess Concrete chipping if any", "grinding_excess_concrete_chipping_if_any"),
+    _cp("RCC Work", "RCC Work", "Cleaning and Handover", "cleaning_and_handover"),
 ]
 
 
@@ -84,6 +89,7 @@ AAC_ITEMS = [
     "Cement Consumption",
     "Gap above Last layer & Beam Bottom proper filling",
     "Curing & Date marking after work completion",
+    "Cleaning and Handover",
 ]
 
 INTERNAL_PLASTER_ITEMS = [
@@ -92,19 +98,23 @@ INTERNAL_PLASTER_ITEMS = [
     "Fibre mesh application on RCC & AAC Block Joint",
     "Fibre mesh application on Electrical Conduit Pipe",
     "Internal Plaster work",
+    "Material Consumption Check",
     "Check Opening in Plaster",
+    "Cleaning and Handover",
 ]
 
 CONCEALED_ELECTRIC_ITEMS = [
     "Level marking on Wall",
     "Marking & fixing of modular boxes",
     "Wall cutting & Conduit Pipe fixing",
+    "Cleaning and Handover",
 ]
 
 CEILING_GYPSUM_ITEMS = [
     "Chemical Application for Ceiling",
     "Dhada marking In Kach (Corners of Slab & Beam)",
     "Ceiling Punning with 4-5mm gypsum with proper finish",
+    "Cleaning and Handover",
 ]
 
 WALL_GYPSUM_ITEMS = [
@@ -112,9 +122,10 @@ WALL_GYPSUM_ITEMS = [
     "Diagonal making & Tikki marking on wall",
     "Dhada marking on wall",
     "Wall Punning with proper finishing",
+    "Cleaning and Handover",
 ]
 
-TOILET_WATERPROOFING_ITEMS = [
+WATERPROOFING_ITEMS = [
     "Cleaning of toilet",
     "Filling of cracks with Cement & Chemical",
     'Kach khadi with 4" chemical coat',
@@ -122,15 +133,7 @@ TOILET_WATERPROOFING_ITEMS = [
     "Basecoat in 1:6 Cement mortar",
     "Brickbat in 1:6 Cement mortar",
     "Waterproofing finishing in 1:6 cement mortar",
-]
-
-TERRACE_WATERPROOFING_ITEMS = [
-    "Cleaning of terrace",
-    "Filling of cracks with Cement & Chemical",
-    'Kach khadi with 4" chemical coat',
-    "2 coat chemical",
-    "Brickbat in 1:6 Cement mortar",
-    "Waterproofing finishing in 1:6 cement mortar",
+    "Cleaning and Handover",
 ]
 
 KITCHEN_PLATFORM_ITEMS = [
@@ -142,11 +145,66 @@ KITCHEN_PLATFORM_ITEMS = [
     "Granite Vertical Fixing",
     "Panera Piece Fixing at reqd level",
     "Facia Patti fixing",
+    "Cleaning and Handover",
 ]
 
 
 def _flat_group(heading: str, items: list[str]) -> list[Checkpoint]:
-    return [_cp(heading, heading, label) for label in items]
+    checkpoints = []
+    for label in items:
+        slug = None
+        aliases = None
+
+        if label == "Cleaning and Handover":
+            slug = f"{_slug(heading)}_cleaning_and_handover"
+        elif heading == "Internal Plaster" and label == "Material Consumption Check":
+            slug = "internal_plaster_material_consumption_check"
+
+        consumption_kind = "plaster_material" if heading == "Internal Plaster" and label == "Material Consumption Check" else None
+        checkpoints.append(_cp(heading, heading, label, slug=slug, aliases=aliases, consumption_kind=consumption_kind))
+    return checkpoints
+
+
+def _waterproofing_kind(label: str) -> str | None:
+    if label == "2 coat chemical":
+        return "chemical_sqft"
+
+    if label in {
+        'Kach khadi with 4" chemical coat',
+        "Basecoat in 1:6 Cement mortar",
+        "Brickbat in 1:6 Cement mortar",
+        "Waterproofing finishing in 1:6 cement mortar",
+    }:
+        return "cement_running_foot"
+
+    return None
+
+
+def _waterproofing_group(section: str, prefix: str, include_basecoat: bool, aliases_prefix: str | None = None) -> list[Checkpoint]:
+    checkpoints = []
+
+    for label in WATERPROOFING_ITEMS:
+        if not include_basecoat and label == "Basecoat in 1:6 Cement mortar":
+            continue
+
+        display_label = "Cleaning of balcony" if section == "Balcony" and label == "Cleaning of toilet" else label
+        aliases = []
+
+        if aliases_prefix:
+            aliases.append(f"{aliases_prefix}_{_slug(label)}")
+
+        checkpoints.append(
+            _prefixed_cp(
+                "Waterproofing Work",
+                section,
+                prefix,
+                display_label,
+                consumption_kind=_waterproofing_kind(label),
+                aliases=aliases,
+            )
+        )
+
+    return checkpoints
 
 
 FLAT_CHECKPOINT_GROUPS = {
@@ -155,13 +213,10 @@ FLAT_CHECKPOINT_GROUPS = {
     "Concealed Electrical Work": _flat_group("Concealed Electrical Work", CONCEALED_ELECTRIC_ITEMS),
     "Ceiling Gypsum Work": _flat_group("Ceiling Gypsum Work", CEILING_GYPSUM_ITEMS),
     "Wall Gypsum Work": _flat_group("Wall Gypsum Work", WALL_GYPSUM_ITEMS),
-    "Toilet Waterproofing Work": (
-        [_prefixed_cp("Toilet Waterproofing Work", "Common Toilet", "common_toilet", label) for label in TOILET_WATERPROOFING_ITEMS]
-        + [_prefixed_cp("Toilet Waterproofing Work", "Master Toilet", "master_toilet", label) for label in TOILET_WATERPROOFING_ITEMS]
-    ),
-    "Dry Terrace / Terrace Waterproofing Work": (
-        [_prefixed_cp("Dry Terrace / Terrace Waterproofing Work", "Balcony", "balcony", label) for label in TERRACE_WATERPROOFING_ITEMS]
-        + [_prefixed_cp("Dry Terrace / Terrace Waterproofing Work", "Dry Balcony", "dry_balcony", label) for label in TERRACE_WATERPROOFING_ITEMS]
+    "Waterproofing Work": (
+        _waterproofing_group("Common Bathroom", "common_bathroom", True, "common_toilet")
+        + _waterproofing_group("Master Bathroom", "master_bathroom", True, "master_toilet")
+        + _waterproofing_group("Balcony", "balcony", False, "balcony")
     ),
     "Kitchen Platform Tile Work": _flat_group("Kitchen Platform Tile Work", KITCHEN_PLATFORM_ITEMS),
 }
@@ -201,6 +256,84 @@ def _column_lookup(df: pd.DataFrame, checkpoints: list[Checkpoint]) -> dict[Chec
         out[cp] = found
 
     return out
+
+
+CONSUMPTION_STEP_OPTIONS = [round(i * 0.25, 2) for i in range(1, 41)]
+
+
+def _find_column(columns, candidates) -> str | None:
+    norm_to_col = {_norm_col(c): c for c in columns}
+
+    for cand in candidates:
+        if cand in columns:
+            return cand
+
+        norm = _norm_col(cand)
+        if norm in norm_to_col:
+            return norm_to_col[norm]
+
+    return None
+
+
+def _consumption_fields(cp: Checkpoint) -> list[dict]:
+    if cp.consumption_kind == "plaster_material":
+        return [
+            {"suffix": "bags", "label": "Consumption in Bags", "unit": "bags", "mode": "step"},
+            {"suffix": "sqft", "label": "Square Feet", "unit": "sqft", "mode": "number"},
+        ]
+
+    if cp.consumption_kind == "cement_running_foot":
+        return [
+            {"suffix": "cement_bags", "label": "Cement Bags", "unit": "bags", "mode": "step"},
+            {"suffix": "running_foot", "label": "Running Foot", "unit": "rft", "mode": "number"},
+        ]
+
+    if cp.consumption_kind == "chemical_sqft":
+        return [
+            {"suffix": "litre", "label": "Litre", "unit": "ltr", "mode": "step"},
+            {"suffix": "sqft", "label": "Square Foot", "unit": "sqft", "mode": "number"},
+        ]
+
+    return []
+
+
+def _consumption_column(row, cp: Checkpoint, suffix: str) -> str | None:
+    columns = list(row.index) if hasattr(row, "index") else []
+    candidates = [f"{cp.slug}_{suffix}", *[f"{alias}_{suffix}" for alias in cp.aliases]]
+    return _find_column(columns, candidates)
+
+
+def _to_float(value):
+    try:
+        if value is None or value == "":
+            return np.nan
+        return float(value)
+    except Exception:
+        return np.nan
+
+
+def _format_qty(value, unit: str) -> str:
+    val = _to_float(value)
+    if pd.isna(val):
+        return "-"
+
+    text = f"{val:.2f}".rstrip("0").rstrip(".")
+    return f"{text} {unit}"
+
+
+def _step_index(value) -> int:
+    val = _to_float(value)
+    if pd.isna(val):
+        return 0
+
+    if val not in CONSUMPTION_STEP_OPTIONS:
+        CONSUMPTION_STEP_OPTIONS.append(round(val, 2))
+        CONSUMPTION_STEP_OPTIONS.sort()
+
+    try:
+        return CONSUMPTION_STEP_OPTIONS.index(round(val, 2))
+    except ValueError:
+        return 0
 
 
 def _is_done(value) -> bool:
@@ -575,6 +708,20 @@ def _save_checkpoints(supabase_client, table_name: str, row, checkpoints, col_ma
         elif (not checked) and current_done:
             payload[col] = None
 
+        for field in _consumption_fields(cp):
+            field_col = _consumption_column(row, cp, field["suffix"])
+            if not field_col:
+                missing.append(f"{cp.label} - {field['label']}")
+                continue
+
+            field_key = f"{form_prefix}_{cp.slug}_{field['suffix']}"
+
+            if checked:
+                field_value = st.session_state.get(field_key)
+                payload[field_col] = None if field_value in ("", None) else float(field_value)
+            elif not checked and _is_done(row.get(field_col)):
+                payload[field_col] = None
+
     if missing:
         st.warning("Some checkpoint columns are missing in Supabase, so they were skipped: " + ", ".join(missing[:8]))
 
@@ -596,12 +743,22 @@ def _checkpoint_table(row, checkpoints, col_map) -> pd.DataFrame:
     for cp in checkpoints:
         col = col_map.get(cp)
         value = row.get(col) if col else None
+        consumption_parts = []
+
+        for field in _consumption_fields(cp):
+            field_col = _consumption_column(row, cp, field["suffix"])
+            field_value = row.get(field_col) if field_col else np.nan
+            formatted = _format_qty(field_value, field["unit"])
+            if formatted != "-":
+                consumption_parts.append(formatted)
+
         rows.append({
             "Main Work": cp.heading,
             "Section": cp.section,
             "Checkpoint": cp.label,
             "Status": "Done" if _is_done(value) else "Pending",
             "Date": _date_label(value),
+            "Consumption": " / ".join(consumption_parts) if consumption_parts else "-",
         })
     return pd.DataFrame(rows)
 
@@ -878,6 +1035,41 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
         _save_checkpoints(supabase_client, FLOOR_TABLE, selected_row, active_cps, floor_col_map, form_prefix)
 
 
+def _render_consumption_popover(row, cp: Checkpoint, form_prefix: str):
+    fields = _consumption_fields(cp)
+    if not fields:
+        return
+
+    popover_label = "Add consumption"
+
+    if hasattr(st, "popover"):
+        container = st.popover(popover_label)
+    else:
+        container = st.expander(popover_label, expanded=False)
+
+    with container:
+        for field in fields:
+            current_col = _consumption_column(row, cp, field["suffix"])
+            current_value = row.get(current_col) if current_col else np.nan
+            key = f"{form_prefix}_{cp.slug}_{field['suffix']}"
+
+            if field["mode"] == "step":
+                st.selectbox(
+                    field["label"],
+                    CONSUMPTION_STEP_OPTIONS,
+                    index=_step_index(current_value),
+                    key=key,
+                )
+            else:
+                st.number_input(
+                    field["label"],
+                    min_value=0.0,
+                    step=1.0,
+                    value=0.0 if pd.isna(_to_float(current_value)) else float(current_value),
+                    key=key,
+                )
+
+
 def _render_update_flat(supabase_client, flat_df, flat_col_map):
     st.markdown("### Update Flat-wise Detailed Checkpoints")
 
@@ -921,11 +1113,16 @@ def _render_update_flat(supabase_client, flat_df, flat_col_map):
                 for cp in section_cps:
                     col = flat_col_map.get(cp)
                     current = selected_row.get(col) if col else None
-                    st.checkbox(
-                        f"{cp.label} ({_date_label(current)})",
-                        value=_is_done(current),
-                        key=f"{form_prefix}_{cp.slug}",
-                    )
+                    cols = st.columns([0.72, 0.28])
+                    with cols[0]:
+                        st.checkbox(
+                            f"{cp.label} ({_date_label(current)})",
+                            value=_is_done(current),
+                            key=f"{form_prefix}_{cp.slug}",
+                        )
+
+                    with cols[1]:
+                        _render_consumption_popover(selected_row, cp, form_prefix)
 
         save = st.form_submit_button("Save Flat Progress", type="primary", use_container_width=True)
 
@@ -941,6 +1138,379 @@ def _progress_color(pct: float) -> str:
     if pct >= 30:
         return "#f59e0b"
     return "#ef4444"
+
+
+def _json_data(value) -> str:
+    def default(obj):
+        if isinstance(obj, (pd.Timestamp, _dt.datetime, _dt.date)):
+            if pd.isna(obj):
+                return ""
+            return obj.strftime("%d-%b-%Y")
+        if pd.isna(obj):
+            return None
+        return str(obj)
+
+    return json.dumps(value, default=default)
+
+
+def _render_clickable_floor_chart(items: list[dict], title: str):
+    html = f"""
+    <div id="cpFloorApp" class="cp-iframe-shell">
+      <div class="cp-iframe-title">{escape(title)}</div>
+      <div id="floorGrid" class="cp-iframe-building"></div>
+      <div id="floorReport" class="cp-iframe-report"></div>
+    </div>
+
+    <style>
+      body{{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#0f172a;}}
+      .cp-iframe-shell{{padding:8px 8px 18px;}}
+      .cp-iframe-title{{background:#334155;color:#fff;text-align:center;font-weight:900;letter-spacing:.04em;text-transform:uppercase;border-radius:12px 12px 4px 4px;padding:12px;margin:0 auto;max-width:980px;}}
+      .cp-iframe-building{{max-width:980px;margin:0 auto 16px;border-left:5px solid #94a3b8;border-right:5px solid #94a3b8;border-bottom:5px solid #94a3b8;background:linear-gradient(90deg,#f1f5f9 0,#fff 7%,#fff 93%,#f1f5f9 100%);box-shadow:0 18px 42px rgba(15,23,42,.12);}}
+      .cp-iframe-floor{{display:grid;grid-template-columns:130px 1fr 96px;gap:10px;align-items:center;padding:8px 12px;border-bottom:1px solid #cbd5e1;cursor:pointer;transition:.15s ease;}}
+      .cp-iframe-floor:hover,.cp-iframe-floor.active{{background:#eff6ff;}}
+      .cp-iframe-floor-label{{font-size:13px;font-weight:900;}}
+      .cp-iframe-floor-bar{{height:30px;position:relative;border:1px solid #cbd5e1;border-radius:7px;overflow:hidden;background:repeating-linear-gradient(90deg,#f8fafc 0,#f8fafc 22px,#e2e8f0 23px,#e2e8f0 24px);}}
+      .cp-iframe-floor-fill{{position:absolute;inset:0 auto 0 0;opacity:.72;}}
+      .cp-iframe-floor-pct{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900;}}
+      .cp-iframe-days{{font-size:12px;font-weight:800;text-align:right;color:#334155;}}
+      .cp-iframe-report{{max-width:980px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;box-shadow:0 10px 24px rgba(15,23,42,.08);}}
+      .cp-report-head{{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8fafc;padding:12px 14px;border-bottom:1px solid #e2e8f0;font-weight:900;}}
+      table{{width:100%;border-collapse:collapse;font-size:13px;}}
+      th{{background:#0f766e;color:#fff;text-align:left;padding:9px 10px;}}
+      td{{border-bottom:1px solid #e2e8f0;padding:9px 10px;}}
+      tr:last-child td{{border-bottom:0;}}
+      .ta-r{{text-align:right;}}
+    </style>
+
+    <script>
+      const levels = {_json_data(items)};
+      const grid = document.getElementById("floorGrid");
+      const report = document.getElementById("floorReport");
+      let selected = 0;
+
+      function renderGrid(){{
+        grid.innerHTML = "";
+        levels.forEach((item, idx) => {{
+          const row = document.createElement("div");
+          row.className = "cp-iframe-floor" + (idx === selected ? " active" : "");
+          row.onclick = () => {{ selected = idx; renderGrid(); renderReport(); }};
+          row.innerHTML = `
+            <div class="cp-iframe-floor-label">${{item.level}}</div>
+            <div class="cp-iframe-floor-bar">
+              <div class="cp-iframe-floor-fill" style="width:${{Math.max(0, Math.min(item.progress, 100))}}%;background:${{item.color}}"></div>
+              <div class="cp-iframe-floor-pct">${{Math.round(item.progress)}}%</div>
+            </div>
+            <div class="cp-iframe-days">${{item.days || "-"}}</div>`;
+          grid.appendChild(row);
+        }});
+      }}
+
+      function cell(text, cls=""){{
+        const td = document.createElement("td");
+        if (cls) td.className = cls;
+        td.textContent = text ?? "-";
+        return td;
+      }}
+
+      function renderReport(){{
+        const item = levels[selected] || levels[0];
+        if (!item) {{
+          report.innerHTML = "<div class='cp-report-head'>No report data</div>";
+          return;
+        }}
+        const wrap = document.createElement("div");
+        const head = document.createElement("div");
+        head.className = "cp-report-head";
+        head.innerHTML = `<span>${{item.level}} Report</span><span>${{Math.round(item.progress)}}%</span>`;
+        const table = document.createElement("table");
+        table.innerHTML = "<thead><tr><th>Main Work</th><th class='ta-r'>Done</th><th class='ta-r'>Total</th><th class='ta-r'>Progress</th></tr></thead>";
+        const tbody = document.createElement("tbody");
+        (item.report || []).forEach(r => {{
+          const tr = document.createElement("tr");
+          tr.appendChild(cell(r["Main Work"]));
+          tr.appendChild(cell(r["Done"], "ta-r"));
+          tr.appendChild(cell(r["Total"], "ta-r"));
+          tr.appendChild(cell(`${{Number(r["Progress %"] || 0).toFixed(1)}}%`, "ta-r"));
+          tbody.appendChild(tr);
+        }});
+        table.appendChild(tbody);
+        wrap.appendChild(head);
+        wrap.appendChild(table);
+        report.innerHTML = "";
+        report.appendChild(wrap);
+      }}
+
+      renderGrid();
+      renderReport();
+    </script>
+    """
+
+    components.html(html, height=820, scrolling=True)
+
+
+def _render_clickable_flat_chart(items: list[dict], title: str):
+    html = f"""
+    <div id="cpFlatApp" class="cp-flat-shell">
+      <div class="cp-flat-title">{escape(title)}</div>
+      <div id="flatGrid" class="cp-flat-grid"></div>
+      <div id="flatReport" class="cp-flat-report"></div>
+    </div>
+
+    <style>
+      body{{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#0f172a;}}
+      .cp-flat-shell{{padding:8px 8px 18px;}}
+      .cp-flat-title{{max-width:1180px;margin:0 auto;background:#334155;color:#fff;text-align:center;font-weight:900;letter-spacing:.04em;text-transform:uppercase;border-radius:14px 14px 4px 4px;padding:12px;}}
+      .cp-flat-grid{{max-width:1180px;margin:0 auto 16px;border-left:5px solid #94a3b8;border-right:5px solid #94a3b8;border-bottom:5px solid #94a3b8;background:linear-gradient(90deg,#f1f5f9 0,#fff 6%,#fff 94%,#f1f5f9 100%);box-shadow:0 18px 42px rgba(15,23,42,.12);}}
+      .cp-flat-row{{display:grid;grid-template-columns:86px repeat(10,1fr);gap:6px;padding:7px 9px;border-bottom:1px solid #cbd5e1;align-items:stretch;}}
+      .cp-flat-floor{{display:flex;align-items:center;justify-content:center;text-align:center;background:#e2e8f0;border-radius:8px;font-size:12px;font-weight:900;line-height:1.15;}}
+      .cp-flat-cell{{position:relative;min-height:56px;border:2px solid #cbd5e1;border-radius:8px;background:#f8fafc;overflow:hidden;cursor:pointer;transition:.15s ease;}}
+      .cp-flat-cell:hover,.cp-flat-cell.active{{transform:translateY(-1px);box-shadow:0 8px 16px rgba(15,23,42,.14);}}
+      .cp-flat-fill{{position:absolute;inset:0 auto 0 0;opacity:.18;}}
+      .cp-flat-text{{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;text-align:center;}}
+      .cp-flat-text strong{{font-size:13px;font-weight:900;}}
+      .cp-flat-text span{{font-size:12px;font-weight:900;color:#475569;}}
+      .cp-flat-report{{max-width:1180px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;box-shadow:0 10px 24px rgba(15,23,42,.08);}}
+      .cp-report-head{{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#f8fafc;padding:12px 14px;border-bottom:1px solid #e2e8f0;font-weight:900;}}
+      .cp-section-title{{background:#ecfeff;color:#155e75;font-weight:900;padding:9px 10px;border-top:1px solid #cffafe;border-bottom:1px solid #cffafe;}}
+      table{{width:100%;border-collapse:collapse;font-size:13px;}}
+      th{{background:#0f766e;color:#fff;text-align:left;padding:9px 10px;}}
+      td{{border-bottom:1px solid #e2e8f0;padding:8px 10px;vertical-align:top;}}
+      tr:last-child td{{border-bottom:0;}}
+      .done{{color:#047857;font-weight:900;}}
+      .pending{{color:#b45309;font-weight:900;}}
+    </style>
+
+    <script>
+      const flats = {_json_data(items)};
+      const grid = document.getElementById("flatGrid");
+      const report = document.getElementById("flatReport");
+      let selectedKey = flats.length ? flats[0].key : null;
+
+      function groupedByFloor(){{
+        const out = new Map();
+        flats.forEach(f => {{
+          const key = String(f.floor);
+          if (!out.has(key)) out.set(key, []);
+          out.get(key).push(f);
+        }});
+        return [...out.entries()].sort((a,b) => Number(b[0]) - Number(a[0]));
+      }}
+
+      function renderGrid(){{
+        grid.innerHTML = "";
+        groupedByFloor().forEach(([floor, cells]) => {{
+          const row = document.createElement("div");
+          row.className = "cp-flat-row";
+          const label = document.createElement("div");
+          label.className = "cp-flat-floor";
+          label.innerHTML = `Floor<br>${{floor}}`;
+          row.appendChild(label);
+          cells.sort((a,b) => String(a.flat).localeCompare(String(b.flat))).forEach(item => {{
+            const cell = document.createElement("div");
+            cell.className = "cp-flat-cell" + (item.key === selectedKey ? " active" : "");
+            cell.style.borderColor = item.color;
+            cell.onclick = () => {{ selectedKey = item.key; renderGrid(); renderReport(); }};
+            cell.innerHTML = `
+              <div class="cp-flat-fill" style="width:${{Math.max(0, Math.min(item.progress, 100))}}%;background:${{item.color}}"></div>
+              <div class="cp-flat-text"><strong>${{item.flatShort}}</strong><span>${{Math.round(item.progress)}}%</span></div>`;
+            row.appendChild(cell);
+          }});
+          grid.appendChild(row);
+        }});
+      }}
+
+      function cell(text, cls=""){{
+        const td = document.createElement("td");
+        if (cls) td.className = cls;
+        td.textContent = text ?? "-";
+        return td;
+      }}
+
+      function renderReport(){{
+        const item = flats.find(f => f.key === selectedKey) || flats[0];
+        if (!item) {{
+          report.innerHTML = "<div class='cp-report-head'>No report data</div>";
+          return;
+        }}
+
+        const wrap = document.createElement("div");
+        const head = document.createElement("div");
+        head.className = "cp-report-head";
+        head.innerHTML = `<span>${{item.flat}} Detailed Report</span><span>${{Math.round(item.progress)}}%</span>`;
+        wrap.appendChild(head);
+
+        const byMain = new Map();
+        (item.report || []).forEach(r => {{
+          const key = r["Main Work"] || "Other";
+          if (!byMain.has(key)) byMain.set(key, []);
+          byMain.get(key).push(r);
+        }});
+
+        byMain.forEach((rows, mainWork) => {{
+          const section = document.createElement("div");
+          section.className = "cp-section-title";
+          const done = rows.filter(r => r.Status === "Done").length;
+          section.textContent = `${{mainWork}} - ${{done}}/${{rows.length}}`;
+          wrap.appendChild(section);
+
+          const table = document.createElement("table");
+          table.innerHTML = "<thead><tr><th>Section</th><th>Checkpoint</th><th>Status</th><th>Date</th><th>Consumption</th></tr></thead>";
+          const tbody = document.createElement("tbody");
+          rows.forEach(r => {{
+            const tr = document.createElement("tr");
+            tr.appendChild(cell(r.Section));
+            tr.appendChild(cell(r.Checkpoint));
+            tr.appendChild(cell(r.Status, r.Status === "Done" ? "done" : "pending"));
+            tr.appendChild(cell(r.Date));
+            tr.appendChild(cell(r.Consumption));
+            tbody.appendChild(tr);
+          }});
+          table.appendChild(tbody);
+          wrap.appendChild(table);
+        }});
+
+        report.innerHTML = "";
+        report.appendChild(wrap);
+      }}
+
+      renderGrid();
+      renderReport();
+    </script>
+    """
+
+    components.html(html, height=980, scrolling=True)
+
+
+def _render_consumption_chart(items: list[dict], title: str):
+    html = f"""
+    <div class="cp-cons-shell">
+      <div class="cp-cons-title">{escape(title)}</div>
+      <div id="consGrid" class="cp-cons-grid"></div>
+    </div>
+
+    <style>
+      body{{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;color:#0f172a;}}
+      .cp-cons-shell{{padding:8px 8px 18px;}}
+      .cp-cons-title{{max-width:1180px;margin:0 auto;background:#334155;color:#fff;text-align:center;font-weight:900;letter-spacing:.04em;text-transform:uppercase;border-radius:14px 14px 4px 4px;padding:12px;}}
+      .cp-cons-grid{{max-width:1180px;margin:0 auto 16px;border-left:5px solid #94a3b8;border-right:5px solid #94a3b8;border-bottom:5px solid #94a3b8;background:linear-gradient(90deg,#f1f5f9 0,#fff 6%,#fff 94%,#f1f5f9 100%);box-shadow:0 18px 42px rgba(15,23,42,.12);}}
+      .cp-cons-row{{display:grid;grid-template-columns:86px repeat(10,1fr);gap:6px;padding:7px 9px;border-bottom:1px solid #cbd5e1;align-items:stretch;}}
+      .cp-cons-floor{{display:flex;align-items:center;justify-content:center;text-align:center;background:#e2e8f0;border-radius:8px;font-size:12px;font-weight:900;line-height:1.15;}}
+      .cp-cons-cell{{min-height:72px;border:2px solid #cbd5e1;border-radius:8px;background:#f8fafc;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:3px;padding:5px;}}
+      .cp-cons-cell.has{{border-color:#0ea5e9;background:#eff6ff;}}
+      .cp-cons-flat{{font-size:12px;font-weight:900;color:#0f172a;}}
+      .cp-cons-val{{font-size:12px;font-weight:900;color:#0369a1;}}
+      .cp-cons-sub{{font-size:11px;font-weight:800;color:#475569;}}
+    </style>
+
+    <script>
+      const cells = {_json_data(items)};
+      const grid = document.getElementById("consGrid");
+      const grouped = new Map();
+      cells.forEach(c => {{
+        const key = String(c.floor);
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(c);
+      }});
+      [...grouped.entries()].sort((a,b) => Number(b[0]) - Number(a[0])).forEach(([floor, rowCells]) => {{
+        const row = document.createElement("div");
+        row.className = "cp-cons-row";
+        const label = document.createElement("div");
+        label.className = "cp-cons-floor";
+        label.innerHTML = `Floor<br>${{floor}}`;
+        row.appendChild(label);
+        rowCells.sort((a,b) => String(a.flatShort).localeCompare(String(b.flatShort))).forEach(item => {{
+          const cell = document.createElement("div");
+          cell.className = "cp-cons-cell" + (item.hasValue ? " has" : "");
+          cell.innerHTML = `
+            <div class="cp-cons-flat">${{item.flatShort}}</div>
+            <div class="cp-cons-val">${{item.valueOne}}</div>
+            <div class="cp-cons-sub">${{item.valueTwo}}</div>`;
+          row.appendChild(cell);
+        }});
+        grid.appendChild(row);
+      }});
+    </script>
+    """
+
+    components.html(html, height=780, scrolling=True)
+
+
+def _render_consumption_tab(flat_df, wings):
+    st.markdown("### Consumption Tracker")
+
+    if flat_df.empty:
+        st.warning("No flat rows found.")
+        return
+
+    consumption_cps = [cp for cp in FLAT_CHECKPOINTS if _consumption_fields(cp)]
+
+    if not consumption_cps:
+        st.info("No consumption checkpoints configured.")
+        return
+
+    area_options = list(dict.fromkeys([cp.section for cp in consumption_cps]))
+
+    with st.form("cp_consumption_view_form", clear_on_submit=False):
+        selected_wing = st.selectbox(
+            "Select Wing",
+            wings,
+            index=wings.index(st.session_state.get("cp_consumption_wing", wings[0])) if st.session_state.get("cp_consumption_wing") in wings else 0,
+        )
+        selected_area = st.selectbox(
+            "Select Area / Process",
+            area_options,
+            index=area_options.index(st.session_state.get("cp_consumption_area", area_options[0])) if st.session_state.get("cp_consumption_area") in area_options else 0,
+        )
+
+        checkpoint_options = [cp for cp in consumption_cps if cp.section == selected_area]
+        checkpoint_labels = [cp.label for cp in checkpoint_options]
+        selected_checkpoint_label = st.selectbox(
+            "Select Checkpoint",
+            checkpoint_labels,
+            index=checkpoint_labels.index(st.session_state.get("cp_consumption_checkpoint", checkpoint_labels[0])) if st.session_state.get("cp_consumption_checkpoint") in checkpoint_labels else 0,
+        )
+
+        show = st.form_submit_button("Show Consumption Chart", use_container_width=True)
+
+    if show or "cp_consumption_wing" not in st.session_state:
+        st.session_state["cp_consumption_wing"] = selected_wing
+        st.session_state["cp_consumption_area"] = selected_area
+        st.session_state["cp_consumption_checkpoint"] = selected_checkpoint_label
+
+    wing = st.session_state.get("cp_consumption_wing", wings[0])
+    area = st.session_state.get("cp_consumption_area", area_options[0])
+    cp_label = st.session_state.get("cp_consumption_checkpoint", checkpoint_labels[0])
+    cp = next((x for x in consumption_cps if x.section == area and x.label == cp_label), checkpoint_options[0])
+    fields = _consumption_fields(cp)
+
+    wing_df = flat_df[flat_df.apply(_wing_value, axis=1) == wing].copy()
+    items = []
+
+    for _, row in wing_df.iterrows():
+        floor = _floor_no(row)
+        if floor is None:
+            continue
+
+        flat_name = _flat_label(row)
+        flat_short = flat_name.replace(f"{wing} ", "").split("(")[0].strip()
+        values = []
+
+        for field in fields:
+            col = _consumption_column(row, cp, field["suffix"])
+            values.append(_format_qty(row.get(col) if col else np.nan, field["unit"]))
+
+        while len(values) < 2:
+            values.append("-")
+
+        items.append({
+            "floor": floor,
+            "flatShort": flat_short,
+            "valueOne": values[0],
+            "valueTwo": values[1],
+            "hasValue": any(v != "-" for v in values),
+        })
+
+    _render_consumption_chart(items, f"Wing {wing} - {area} - {cp.label}")
 
 
 def _render_floorwise(floor_df, flat_df, floor_col_map, flat_col_map, wings):
@@ -968,47 +1538,30 @@ def _render_floorwise(floor_df, flat_df, floor_col_map, flat_col_map, wings):
         st.info("No floor progress found for this wing.")
         return
 
-    building_rows = []
+    floor_items = []
+    wing_floor_df = floor_df[floor_df.apply(_wing_value, axis=1) == wing].copy()
+
     for _, row in levels.iterrows():
         pct = float(row["Progress %"])
-        color = _progress_color(pct)
-        building_rows.append(
-            f"""
-            <div class="cp-building-row">
-                <div class="cp-floor-label">{row['Level']}</div>
-                <div class="cp-floor-body">
-                    <div class="cp-floor-fill" style="width:{max(0, min(pct, 100))}%; background:{color};"></div>
-                    <div class="cp-floor-text">{pct:.0f}%</div>
-                </div>
-                <div class="cp-floor-days">{_fmt_days(row['Days Difference'])}</div>
-            </div>
-            """
-        )
+        floor_match = wing_floor_df[wing_floor_df.apply(_level_label, axis=1) == row["Level"]]
 
-    st.markdown(
-        f"""
-        <div class="cp-building-core">
-            <div class="cp-building-roof"></div>
-            {''.join(building_rows)}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        if floor_match.empty:
+            report = pd.DataFrame()
+        else:
+            floor_row = floor_match.iloc[0]
+            floor_flats = _floor_flat_rows(flat_df, wing, _floor_no(floor_row))
+            report = _work_progress_for_level(floor_row, floor_flats, floor_col_map, flat_col_map)
+            report["Progress %"] = report["Progress %"].round(1)
 
-    level_labels = levels["Level"].tolist()
-    report_level = st.selectbox(
-        "Open floor report",
-        level_labels,
-        key="cp_floor_report_level",
-    )
+        floor_items.append({
+            "level": row["Level"],
+            "progress": pct,
+            "days": _fmt_days(row["Days Difference"]),
+            "color": _progress_color(pct),
+            "report": report.to_dict("records") if not report.empty else [],
+        })
 
-    wing_floor_df = floor_df[floor_df.apply(_wing_value, axis=1) == wing].copy()
-    floor_row = wing_floor_df[wing_floor_df.apply(_level_label, axis=1) == report_level].iloc[0]
-    floor_flats = _floor_flat_rows(flat_df, wing, _floor_no(floor_row))
-    report = _work_progress_for_level(floor_row, floor_flats, floor_col_map, flat_col_map)
-    report["Progress %"] = report["Progress %"].round(1)
-
-    st.dataframe(report, use_container_width=True, hide_index=True)
+    _render_clickable_floor_chart(floor_items, f"Wing {wing} Floor Progress")
 
 
 def _render_flatwise(flat_df, flat_col_map, wings):
@@ -1039,103 +1592,29 @@ def _render_flatwise(flat_df, flat_col_map, wings):
     flat_df_local = flat_df[flat_df.apply(_wing_value, axis=1) == wing].copy()
     key_to_row = {_row_key(row): row for _, row in flat_df_local.iterrows()}
 
-    floors = sorted([f for f in progress_df["Floor No"].dropna().unique().tolist()], reverse=True)
+    flat_items = []
 
-    st.markdown(
-        f"""
-        <div class="cp-flat-building-shell">
-            <div class="cp-flat-building-title">Wing {wing} Flat Progress</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    for _, row in progress_df.sort_values(["Floor No", "Flat"], ascending=[False, True]).iterrows():
+        selected_row = key_to_row.get(row["Row Key"])
+        if selected_row is None:
+            continue
 
-    for floor in floors:
-        floor_progress = progress_df[progress_df["Floor No"] == floor].sort_values("Flat")
-        st.markdown("<div class='cp-flat-floor-band'>", unsafe_allow_html=True)
-        label_col, *flat_cols = st.columns([0.95, *([1] * 10)], gap="small")
-
-        with label_col:
-            st.markdown(
-                f"<div class='cp-flat-floor-label'>Floor<br>{int(floor)}</div>",
-                unsafe_allow_html=True,
-            )
-
-        for idx, (_, row) in enumerate(floor_progress.iterrows()):
-            pct = float(row["Progress %"])
-            color = _progress_color(pct)
-            flat_name = str(row["Flat"]).replace(f"{wing} ", "").split("(")[0].strip()
-            with flat_cols[idx % 10]:
-                st.markdown(
-                    f"""
-                    <div class="cp-flat-cell-preview" style="border-color:{color};">
-                        <div class="cp-flat-cell-fill" style="width:{max(0, min(pct, 100))}%; background:{color};"></div>
-                        <div class="cp-flat-cell-text">
-                            <strong>{flat_name}</strong>
-                            <span>{pct:.0f}%</span>
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            if flat_cols[idx % 10].button("Report", key=f"cp_flat_btn_{wing}_{floor}_{idx}_{row['Row Key']}", use_container_width=True):
-                st.session_state["cp_selected_flat_report_key"] = row["Row Key"]
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    selected_key = st.session_state.get("cp_selected_flat_report_key")
-    if selected_key not in key_to_row and key_to_row:
-        selected_key = next(iter(key_to_row.keys()))
-        st.session_state["cp_selected_flat_report_key"] = selected_key
-
-    if selected_key in key_to_row:
-        selected_row = key_to_row[selected_key]
-        st.markdown(f"### Detailed Flat Report - {_flat_label(selected_row)}")
+        pct = float(row["Progress %"])
+        flat_name = str(row["Flat"])
+        flat_short = flat_name.replace(f"{wing} ", "").split("(")[0].strip()
         report_df = _flat_report_df(selected_row, flat_col_map)
 
-        group_summary = (
-            report_df.assign(Done=report_df["Status"].eq("Done").astype(int), Total=1)
-            .groupby(["Main Work", "Section"], as_index=False)
-            .agg(Done=("Done", "sum"), Total=("Total", "sum"))
-        )
-        group_summary["Progress %"] = (group_summary["Done"] / group_summary["Total"] * 100).round(1)
+        flat_items.append({
+            "key": row["Row Key"],
+            "floor": int(row["Floor No"]) if pd.notna(row["Floor No"]) else "",
+            "flat": flat_name,
+            "flatShort": flat_short,
+            "progress": pct,
+            "color": _progress_color(pct),
+            "report": report_df.to_dict("records"),
+        })
 
-        c1, c2, c3 = st.columns(3)
-        done_count = int((report_df["Status"] == "Done").sum())
-        total_count = int(len(report_df))
-        pending_count = total_count - done_count
-
-        with c1:
-            _card("Checkpoints Done", f"{done_count}/{total_count}", "Selected flat")
-        with c2:
-            _card("Flat Progress", _fmt_pct((done_count / total_count * 100) if total_count else 0), "All detailed checkpoints")
-        with c3:
-            _card("Pending Checkpoints", _fmt_int(pending_count), "Remaining work items")
-
-        st.markdown("#### Detailed Checkpoints")
-
-        for heading in FLAT_CHECKPOINT_GROUPS.keys():
-            heading_df = report_df[report_df["Main Work"] == heading].copy()
-            if heading_df.empty:
-                continue
-
-            heading_done = int((heading_df["Status"] == "Done").sum())
-            heading_total = int(len(heading_df))
-            heading_pct = (heading_done / heading_total * 100) if heading_total else 0
-
-            with st.expander(f"{heading} - {heading_done}/{heading_total} ({heading_pct:.0f}%)", expanded=True):
-                for section in dict.fromkeys(heading_df["Section"].tolist()):
-                    section_df = heading_df[heading_df["Section"] == section].copy()
-                    if section != heading:
-                        st.markdown(f"**{section}**")
-
-                    st.dataframe(
-                        section_df[["Checkpoint", "Status", "Date"]],
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-        st.markdown("#### Section Summary")
-        st.dataframe(group_summary, use_container_width=True, hide_index=True)
+    _render_clickable_flat_chart(flat_items, f"Wing {wing} Flat Progress")
 
 
 def _inject_css():
@@ -1322,12 +1801,13 @@ def render_construction_progress_tab(supabase_client):
     flat_col_map = _column_lookup(flat_df, FLAT_CHECKPOINTS)
     wings = _wing_options(floor_df, flat_df)
 
-    dashboard_tab, slab_update_tab, flat_update_tab, floor_tab, flat_tab = st.tabs([
+    dashboard_tab, slab_update_tab, flat_update_tab, floor_tab, flat_tab, consumption_tab = st.tabs([
         "Dashboard",
         "Update Slab / RCC",
         "Update Flat Work",
         "Floor-wise Progress",
         "Flat-wise Progress",
+        "Consumption",
     ])
 
     with dashboard_tab:
@@ -1353,6 +1833,9 @@ def render_construction_progress_tab(supabase_client):
 
     with flat_tab:
         _render_flatwise(flat_df, flat_col_map, wings)
+
+    with consumption_tab:
+        _render_consumption_tab(flat_df, wings)
 
 
 supabase_client = globals().get("supabase", None) or globals().get("supabase_client", None)
