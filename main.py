@@ -377,12 +377,83 @@ MAIN_SECTIONS = [
     "Site Summary",
 ]
 
-st.sidebar.markdown("### Open Section")
+MAIN_SECTION_ICONS = {
+    "Dashboard": "📊",
+    "Calculators": "🧮",
+    "Booking Punch": "📝",
+    "Total Package & Schedule": "📦",
+    "Agreement Done Tracker": "📑",
+    "CP Payout Tracker": "🤝",
+    "Marketing": "📣",
+    "Civil Changes Lookup": "🧱",
+    "Agreement Document Editor": "📄",
+    "Pratham Vihar AI": "✨",
+    "Daily Visits": "📍",
+    "Inventory Status": "🏢",
+    "Construction Progress": "🏗️",
+    "CashFlow": "💰",
+    "Sales Target": "🎯",
+    "Site Summary": "📌",
+}
+
+
+def _main_section_label(section_name: str) -> str:
+    return f"{MAIN_SECTION_ICONS.get(section_name, '•')}  {section_name}"
+
+
+st.sidebar.markdown(
+    """
+    <style>
+      section[data-testid="stSidebar"] div[role="radiogroup"] {
+        gap: 7px;
+      }
+      section[data-testid="stSidebar"] div[role="radiogroup"] label {
+        border: 1px solid #e2e8f0;
+        border-radius: 11px;
+        padding: 9px 10px;
+        background: #ffffff;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        transition: all 150ms ease;
+      }
+      section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+        border-color: #93c5fd;
+        background: #f8fafc;
+        transform: translateX(2px);
+      }
+      section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+        border-color: #2563eb;
+        background: linear-gradient(135deg, #eff6ff 0%, #eef2ff 100%);
+        box-shadow: 0 6px 14px rgba(37, 99, 235, 0.14);
+      }
+      section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
+        color: #0f172a;
+        font-weight: 800;
+      }
+      .pv-nav-title {
+        font-size: 13px;
+        font-weight: 900;
+        color: #475569;
+        text-transform: uppercase;
+        letter-spacing: .05em;
+        margin: 6px 0 8px;
+      }
+      .pv-nav-note {
+        font-size: 12px;
+        color: #64748b;
+        margin: -2px 0 10px;
+      }
+    </style>
+    <div class="pv-nav-title">Open Section</div>
+    <div class="pv-nav-note">Only this section loads, so the app stays lighter.</div>
+    """,
+    unsafe_allow_html=True,
+)
 selected_main_section = st.sidebar.radio(
     "Open Section",
     MAIN_SECTIONS,
     key="selected_main_section",
     label_visibility="collapsed",
+    format_func=_main_section_label,
 )
 
 st.markdown(f"## {selected_main_section}")
