@@ -1,5 +1,8 @@
 # ---------------- TAB 5: AGREEMENT DONE TRACKER - SUPABASE ----------------
 
+import datetime as _dt
+
+
 BOOKINGS_TABLE = "bookings"
 
 
@@ -98,6 +101,27 @@ def update_booking_status(booking_id, updates):
         pass
 
     return response
+
+
+def _tab5_today_date_value():
+    return _dt.date.today().isoformat()
+
+
+def _tab5_status_present(value):
+    """
+    Status columns now store the completion date.
+    Existing old values like Done/Received/Given should still read as checked
+    until the SQL cleanup converts them to dates.
+    """
+    s = str(value or "").strip()
+    if not s:
+        return False
+
+    return s.lower() not in {"pending", "no", "false", "0", "nan", "none", "null", "-"}
+
+
+def _tab5_banker_yes(value):
+    return str(value or "").strip().lower() == "yes"
 
 
 if selected_main_section == "Agreement Done Tracker":
@@ -490,7 +514,7 @@ if selected_main_section == "Agreement Done Tracker":
 
                         post_df = post_df[
                             post_df["stamp_duty"].apply(
-                                lambda v: _norm(v) == "received"
+                                _tab5_status_present
                             )
                             == want_received
                         ]
@@ -500,7 +524,7 @@ if selected_main_section == "Agreement Done Tracker":
 
                         post_df = post_df[
                             post_df["agreement_done"].apply(
-                                lambda v: _norm(v) == "done"
+                                _tab5_status_present
                             )
                             == want_done
                         ]
@@ -512,7 +536,7 @@ if selected_main_section == "Agreement Done Tracker":
 
                         post_df = post_df[
                             post_df["incentive"].apply(
-                                lambda v: _norm(v) == "given"
+                                _tab5_status_present
                             )
                             == want_given
                         ]
@@ -522,7 +546,7 @@ if selected_main_section == "Agreement Done Tracker":
 
                         post_df = post_df[
                             post_df["insider_banker"].apply(
-                                lambda v: _norm(v) == "yes"
+                                _tab5_banker_yes
                             )
                             == want_yes
                         ]
@@ -532,7 +556,7 @@ if selected_main_section == "Agreement Done Tracker":
 
                         post_df = post_df[
                             post_df["outsider_banker"].apply(
-                                lambda v: _norm(v) == "yes"
+                                _tab5_banker_yes
                             )
                             == want_yes
                         ]
@@ -561,30 +585,14 @@ if selected_main_section == "Agreement Done Tracker":
                         elif choice == "Rewarded":
                             post_df = post_df[
                                 post_df["offer_1_rewarded"].apply(
-                                    lambda x: _norm(x)
-                                    in (
-                                        "rewarded 1",
-                                        "true",
-                                        "yes",
-                                        "1",
-                                        "y",
-                                        "✓",
-                                    )
+                                    _tab5_status_present
                                 )
                             ]
 
                         elif choice == "Not Rewarded":
                             post_df = post_df[
                                 ~post_df["offer_1_rewarded"].apply(
-                                    lambda x: _norm(x)
-                                    in (
-                                        "rewarded 1",
-                                        "true",
-                                        "yes",
-                                        "1",
-                                        "y",
-                                        "✓",
-                                    )
+                                    _tab5_status_present
                                 )
                             ]
 
@@ -612,30 +620,14 @@ if selected_main_section == "Agreement Done Tracker":
                         elif choice == "Rewarded":
                             post_df = post_df[
                                 post_df["offer_2_rewarded"].apply(
-                                    lambda x: _norm(x)
-                                    in (
-                                        "rewarded 2",
-                                        "true",
-                                        "yes",
-                                        "1",
-                                        "y",
-                                        "✓",
-                                    )
+                                    _tab5_status_present
                                 )
                             ]
 
                         elif choice == "Not Rewarded":
                             post_df = post_df[
                                 ~post_df["offer_2_rewarded"].apply(
-                                    lambda x: _norm(x)
-                                    in (
-                                        "rewarded 2",
-                                        "true",
-                                        "yes",
-                                        "1",
-                                        "y",
-                                        "✓",
-                                    )
+                                    _tab5_status_present
                                 )
                             ]
 
@@ -727,42 +719,25 @@ if selected_main_section == "Agreement Done Tracker":
                             flat_addr = row.get("flat_address", "")
                             cust_name = row.get("customer_name", "")
 
-                            is_agreement_done = (
-                                _norm(row.get("agreement_done", "")) == "done"
-                            )
+                            is_agreement_done = _tab5_status_present(row.get("agreement_done", ""))
 
-                            is_stamp_received = (
-                                _norm(row.get("stamp_duty", "")) == "received"
-                            )
+                            is_stamp_received = _tab5_status_present(row.get("stamp_duty", ""))
 
-                            is_incentive_given = (
-                                _norm(row.get("incentive", "")) == "given"
-                            )
+                            is_incentive_given = _tab5_status_present(row.get("incentive", ""))
 
-                            is_referral_given = (
-                                _norm(row.get("referral_given", "")) == "given"
-                            )
+                            is_referral_given = _tab5_status_present(row.get("referral_given", ""))
 
-                            is_rcc_completed = (
-                                _norm(row.get("rcc", "")) == "completed"
-                            )
+                            is_rcc_completed = _tab5_status_present(row.get("rcc", ""))
 
-                            is_poss_handover = (
-                                _norm(row.get("possession_handover", ""))
-                                == "handover"
-                            )
+                            is_poss_handover = _tab5_status_present(row.get("possession_handover", ""))
 
                             is_referral_lead = (
                                 _norm(row.get("lead_type", "")) == "referral"
                             )
 
-                            is_insider = (
-                                _norm(row.get("insider_banker", "")) == "yes"
-                            )
+                            is_insider = _tab5_banker_yes(row.get("insider_banker", ""))
 
-                            is_outsider = (
-                                _norm(row.get("outsider_banker", "")) == "yes"
-                            )
+                            is_outsider = _tab5_banker_yes(row.get("outsider_banker", ""))
 
                             offer1_text = str(row.get("offer_1", "") or "").strip()
                             offer2_text = str(row.get("offer_2", "") or "").strip()
@@ -770,26 +745,9 @@ if selected_main_section == "Agreement Done Tracker":
                             has_offer1 = offer1_text != ""
                             has_offer2 = offer2_text != ""
 
-                            o1_cell = _norm(row.get("offer_1_rewarded", "") or "")
-                            o2_cell = _norm(row.get("offer_2_rewarded", "") or "")
+                            is_o1_rewarded = _tab5_status_present(row.get("offer_1_rewarded", ""))
 
-                            is_o1_rewarded = o1_cell in (
-                                "rewarded 1",
-                                "true",
-                                "yes",
-                                "1",
-                                "y",
-                                "✓",
-                            )
-
-                            is_o2_rewarded = o2_cell in (
-                                "rewarded 2",
-                                "true",
-                                "yes",
-                                "1",
-                                "y",
-                                "✓",
-                            )
+                            is_o2_rewarded = _tab5_status_present(row.get("offer_2_rewarded", ""))
 
                             (
                                 col0,
@@ -892,66 +850,71 @@ if selected_main_section == "Agreement Done Tracker":
 
                             # Collect updates for this row
                             updates = {}
+                            date_value = _tab5_today_date_value()
 
                             # Same logic as Google Sheets version:
                             # These statuses are set when checked.
                             # Unchecking does not reverse them.
-                            if stamp_checked and row.get("stamp_duty") != "Received":
-                                updates["stamp_duty"] = "Received"
+                            if stamp_checked and not _tab5_status_present(row.get("stamp_duty")):
+                                updates["stamp_duty"] = date_value
 
                             if (
                                 agreement_checked
-                                and row.get("agreement_done") != "Done"
+                                and not _tab5_status_present(row.get("agreement_done"))
                             ):
-                                updates["agreement_done"] = "Done"
+                                updates["agreement_done"] = date_value
 
                             if (
                                 incentive_checked
-                                and row.get("incentive") != "Given"
+                                and not _tab5_status_present(row.get("incentive"))
                             ):
-                                updates["incentive"] = "Given"
+                                updates["incentive"] = date_value
 
-                            if rcc_checked and row.get("rcc") != "Completed":
-                                updates["rcc"] = "Completed"
+                            if rcc_checked and not _tab5_status_present(row.get("rcc")):
+                                updates["rcc"] = date_value
 
                             if (
                                 pos_checked
-                                and row.get("possession_handover") != "Handover"
+                                and not _tab5_status_present(row.get("possession_handover"))
                             ):
-                                updates["possession_handover"] = "Handover"
+                                updates["possession_handover"] = date_value
 
                             if (
                                 is_referral_lead
                                 and referral_checked
-                                and row.get("referral_given") != "Given"
+                                and not _tab5_status_present(row.get("referral_given"))
                             ):
-                                updates["referral_given"] = "Given"
+                                updates["referral_given"] = date_value
 
                             if (
                                 insider_checked
-                                and row.get("insider_banker") != "Yes"
+                                and not _tab5_banker_yes(row.get("insider_banker"))
                             ):
                                 updates["insider_banker"] = "Yes"
 
                             if (
                                 outsider_checked
-                                and row.get("outsider_banker") != "Yes"
+                                and not _tab5_banker_yes(row.get("outsider_banker"))
                             ):
                                 updates["outsider_banker"] = "Yes"
 
                             # Offers allow toggle:
-                            # checked = Rewarded, unchecked = blank
+                            # checked = date, unchecked = blank
                             if has_offer1:
-                                new_o1_val = "Rewarded 1" if o1_checked else ""
+                                current_o1_present = _tab5_status_present(row.get("offer_1_rewarded"))
 
-                                if row.get("offer_1_rewarded") != new_o1_val:
-                                    updates["offer_1_rewarded"] = new_o1_val
+                                if o1_checked and not current_o1_present:
+                                    updates["offer_1_rewarded"] = date_value
+                                elif (not o1_checked) and current_o1_present:
+                                    updates["offer_1_rewarded"] = ""
 
                             if has_offer2:
-                                new_o2_val = "Rewarded 2" if o2_checked else ""
+                                current_o2_present = _tab5_status_present(row.get("offer_2_rewarded"))
 
-                                if row.get("offer_2_rewarded") != new_o2_val:
-                                    updates["offer_2_rewarded"] = new_o2_val
+                                if o2_checked and not current_o2_present:
+                                    updates["offer_2_rewarded"] = date_value
+                                elif (not o2_checked) and current_o2_present:
+                                    updates["offer_2_rewarded"] = ""
 
                             # Push row update to Supabase
                             if updates:
