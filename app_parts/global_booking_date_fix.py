@@ -30,6 +30,37 @@ def _safe_str_series(series):
     return s.map(lambda x: "" if str(x).strip().lower() in {"nan", "nat", "none"} else str(x).strip())
 
 
+def _pv_status_present(value) -> bool:
+    s = "" if value is None else str(value).strip()
+    if not s:
+        return False
+
+    return s.lower() not in {
+        "pending",
+        "not received",
+        "not recieved",
+        "not done",
+        "no",
+        "n",
+        "false",
+        "0",
+        "na",
+        "n/a",
+        "nan",
+        "nat",
+        "none",
+        "null",
+        "-",
+    }
+
+
+def _pv_canonical_status_series(series: pd.Series, done_label: str) -> pd.Series:
+    if not isinstance(series, pd.Series):
+        series = pd.Series(series)
+
+    return series.apply(lambda v: done_label if _pv_status_present(v) else "")
+
+
 def _pv_norm_col(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(name or "").strip().lower())
 
@@ -280,6 +311,24 @@ def prepare_bookings_from_date(raw_df: pd.DataFrame, start_date=PV_BOOKING_START
     # Force object dtype so pandas categorical fillna error never happens here
     for c in ["Month", "month", "MonthYear", "Quarter", "MonthKey", "QuarterKey"]:
         df[c] = df[c].astype("object")
+
+    # The Agreement Done Tracker now stores dates in these status columns.
+    # Keep the rest of the existing app compatible by exposing the same
+    # old status words in the in-memory dataframes only. Supabase keeps dates.
+    status_compat = {
+        "Stamp Duty": "Received",
+        "Agreement Done": "Done",
+        "Incentive": "Given",
+        "RCC": "Completed",
+        "POSSESSION HANDOVER": "Handover",
+        "Referral Given": "Given",
+        "Offer 1 Rewarded": "Rewarded 1",
+        "Offer 2 Rewarded": "Rewarded 2",
+    }
+
+    for col, done_label in status_compat.items():
+        if col in df.columns:
+            df[col] = _pv_canonical_status_series(df[col], done_label).astype("object")
 
     if show_warning and (invalid_removed > 0 or old_removed > 0):
         st.info(
