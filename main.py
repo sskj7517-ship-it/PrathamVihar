@@ -377,7 +377,6 @@ MAIN_SECTIONS = [
     "Daily Progress Report",
     "CashFlow",
     "Sales Target",
-    "Site Summary",
 ]
 
 MAIN_SECTION_ICONS = {
@@ -399,7 +398,6 @@ MAIN_SECTION_ICONS = {
     "Daily Progress Report": "📋",
     "CashFlow": "💰",
     "Sales Target": "🎯",
-    "Site Summary": "📌",
 }
 
 
@@ -503,7 +501,6 @@ SECTION_FILES = {
     "Daily Progress Report": "tabs/daily_progress_report.py",
     "CashFlow": "tabs/cashflow.py",
     "Sales Target": "tabs/sales_target.py",
-    "Site Summary": "tabs/site_summary.py",
 }
 
 _run_app_file(SECTION_FILES[selected_main_section])
