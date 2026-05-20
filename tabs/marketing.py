@@ -19,7 +19,7 @@ if selected_main_section == "Marketing":
         "Sales Office & Sample Flat", "Offers", "Referral", "Site Maintenance", "Office Rent",
         "Mobile Internet and Recharge", "Transportation", "Miscellaneous", "Refreshment", "Electrical Appliances",
         "Stage", "Brochures", "Housekeeping", "CP Meet", "Launch Event", "Model", "IVR", "Stationary",
-        "Offers", "Sales Office & Sample Flat", "Garden Maintenance"
+        "Offers", "Sales Office & Sample Flat", "Garden Maintenance", "Salary"
     ]
 
     add_tab, dashboard_tab, tables_tab = st.tabs(
