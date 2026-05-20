@@ -1,0 +1,988 @@
+# ---------------- TAB 5: AGREEMENT DONE TRACKER - SUPABASE ----------------
+
+BOOKINGS_TABLE = "bookings"
+
+
+def _tab5_norm_col(name: str) -> str:
+    return "".join(ch for ch in str(name or "").lower() if ch.isalnum())
+
+
+def _normalize_tracker_booking_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Agreement Done Tracker works with Supabase snake_case names.
+    Shared app cleanup can rename the cached dataframe to display names,
+    so normalize both formats back to one internal shape here.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out = df.copy()
+    norm_to_col = {_tab5_norm_col(c): c for c in out.columns}
+
+    aliases = {
+        "id": ["id"],
+        "month": ["month", "Month"],
+        "customer_name": ["customer_name", "Customer Name"],
+        "sales_executive": ["sales_executive", "Sales Executive"],
+        "wing": ["wing", "Wing"],
+        "flat_number": ["flat_number", "Flat Number"],
+        "agreement_done": ["agreement_done", "Agreement Done"],
+        "stamp_duty": ["stamp_duty", "Stamp Duty"],
+        "incentive": ["incentive", "Incentive"],
+        "rcc": ["rcc", "RCC"],
+        "possession_handover": ["possession_handover", "POSSESSION HANDOVER", "Possession Handover"],
+        "lead_type": ["lead_type", "Lead Type"],
+        "referral_given": ["referral_given", "Referral Given"],
+        "insider_banker": ["insider_banker", "Insider Banker"],
+        "outsider_banker": ["outsider_banker", "Outsider Banker"],
+        "offer_1": ["offer_1", "Offer 1"],
+        "offer_2": ["offer_2", "Offer 2"],
+        "offer_1_rewarded": ["offer_1_rewarded", "Offer 1 Rewarded"],
+        "offer_2_rewarded": ["offer_2_rewarded", "Offer 2 Rewarded"],
+    }
+
+    for target, possible_names in aliases.items():
+        if target in out.columns:
+            continue
+
+        source = None
+        for name in possible_names:
+            source = norm_to_col.get(_tab5_norm_col(name))
+            if source:
+                break
+
+        out[target] = out[source] if source else ""
+
+    return out
+
+
+def get_bookings_df():
+    """
+    Uses already-loaded Supabase data from load_all_data().
+    Falls back to direct Supabase fetch if booking_df is empty.
+    """
+    global booking_df
+
+    if "booking_df" in globals() and booking_df is not None and not booking_df.empty:
+        return _normalize_tracker_booking_df(booking_df)
+
+    response = (
+        supabase
+        .table(BOOKINGS_TABLE)
+        .select("*")
+        .order("id", desc=False)
+        .execute()
+    )
+
+    return _normalize_tracker_booking_df(pd.DataFrame(response.data or []))
+
+
+def update_booking_status(booking_id, updates):
+    """
+    Updates one row in public.bookings using primary key id.
+    """
+    if not updates:
+        return None
+
+    response = (
+        supabase
+        .table(BOOKINGS_TABLE)
+        .update(updates)
+        .eq("id", int(booking_id))
+        .execute()
+    )
+
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+    return response
+
+
+if selected_main_section == "Agreement Done Tracker":
+    st.title("📑 Agreement Done Tracker")
+
+    # ---- Keep state across reruns ----
+    if "tab5_filters_active" not in st.session_state:
+        st.session_state.tab5_filters_active = False
+
+    if "tab5_customer" not in st.session_state:
+        st.session_state.tab5_customer = "ALL"
+
+    # Defaults for fixed + single variable filter
+    defaults = {
+        # FIXED filters
+        "tab5_month": "ALL",
+        "tab5_exec": "ALL",
+        "tab5_wing": "ALL",
+
+        # Which ONE extra filter to apply
+        "tab5_filter_field": "ALL (no extra filter)",
+
+        # Controls for the variable filter
+        "tab5_addr_contains": "",
+        "tab5_name_contains": "",
+        "tab5_stamp_choice": "Received",
+        "tab5_agree_choice": "Done",
+        "tab5_incentive_choice": "Given",
+        "tab5_insider_choice": "Yes",
+        "tab5_outsider_choice": "Yes",
+        "tab5_o1_choice": "Has Offer",
+        "tab5_o2_choice": "Has Offer",
+    }
+
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    def _tab5_apply_filters():
+        st.session_state.tab5_filters_active = True
+
+    def _tab5_reset_filters():
+        st.session_state.tab5_filters_active = False
+        st.session_state.tab5_customer = "ALL"
+
+        for k, v in defaults.items():
+            st.session_state[k] = v
+
+    # Guard for Supabase connection
+    if not supabase_connected:
+        st.warning("🗄️ Please connect to Supabase to use this feature.")
+
+    else:
+        # --- Load data from Supabase dataframe ---
+        df = get_bookings_df()
+
+        if df.empty:
+            st.warning("No data available in Supabase table.")
+
+        else:
+            # Required Supabase columns
+            required_cols = [
+                "id",
+                "month",
+                "customer_name",
+                "sales_executive",
+                "wing",
+                "flat_number",
+                "agreement_done",
+                "stamp_duty",
+                "incentive",
+                "rcc",
+                "possession_handover",
+                "lead_type",
+                "referral_given",
+                "insider_banker",
+                "outsider_banker",
+                "offer_1",
+                "offer_2",
+                "offer_1_rewarded",
+                "offer_2_rewarded",
+            ]
+
+            missing = [c for c in required_cols if c not in df.columns]
+
+            if missing:
+                st.error(
+                    f"Missing required columns in Supabase table `{BOOKINGS_TABLE}`: "
+                    f"{', '.join(missing)}"
+                )
+
+            else:
+                # Derived display column, not saved to Supabase
+                df["flat_address"] = (
+                    df["wing"].fillna("").astype(str).str.strip()
+                    + " "
+                    + df["flat_number"].fillna("").astype(str).str.strip()
+                ).str.strip()
+
+                # Helper for normalizing status text
+                def _norm(s):
+                    return str(s or "").strip().lower()
+
+                # Helper for dropdown labels
+                def make_label(row):
+                    wf = str(row.get("flat_address", "") or "").strip()
+                    nm = str(row.get("customer_name", "") or "").strip()
+                    return f"{wf} - {nm}" if wf else nm
+
+                # For customer dropdown inside the form,
+                # build list based on current fixed filters
+                base_preview = df.copy()
+
+                pre_month = st.session_state.get("tab5_month", "ALL")
+                pre_exec = st.session_state.get("tab5_exec", "ALL")
+                pre_wing = st.session_state.get("tab5_wing", "ALL")
+
+                if pre_month != "ALL":
+                    base_preview = base_preview[
+                        base_preview["month"].astype(str) == str(pre_month)
+                    ]
+
+                if pre_exec != "ALL":
+                    base_preview = base_preview[
+                        base_preview["sales_executive"].astype(str) == str(pre_exec)
+                    ]
+
+                if pre_wing != "ALL":
+                    base_preview = base_preview[
+                        base_preview["wing"].astype(str).str.strip() == str(pre_wing)
+                    ]
+
+                label_map_preview = {
+                    idx: make_label(r) for idx, r in base_preview.iterrows()
+                }
+
+                customer_options = ["ALL"] + [
+                    label_map_preview[i] for i in base_preview.index
+                ]
+
+                cust_default_idx = (
+                    customer_options.index(st.session_state.tab5_customer)
+                    if st.session_state.tab5_customer in customer_options
+                    else 0
+                )
+
+                # -------------------- FILTER FORM --------------------
+                with st.form("agreement_filter_form"):
+
+                    # Month fixed filter
+                    month_values = sorted(
+                        df["month"]
+                        .dropna()
+                        .astype(str)
+                        .replace("None", "")
+                        .unique(),
+                        reverse=True,
+                    )
+                    month_values = [m for m in month_values if m.strip() != ""]
+                    month_options = ["ALL"] + list(month_values)
+
+                    st.selectbox(
+                        "Month (fixed)",
+                        month_options,
+                        key="tab5_month",
+                        help="Always applied. Choose ALL to include all months.",
+                    )
+
+                    # Sales Executive fixed filter
+                    exec_values = sorted(
+                        df["sales_executive"]
+                        .dropna()
+                        .astype(str)
+                        .replace("None", "")
+                        .unique()
+                    )
+                    exec_values = [e for e in exec_values if e.strip() != ""]
+                    exec_options = ["ALL"] + list(exec_values)
+
+                    st.selectbox(
+                        "Sales Executive (fixed)",
+                        exec_options,
+                        key="tab5_exec",
+                        help="Always applied. Choose ALL to include all executives.",
+                    )
+
+                    # Wing fixed filter
+                    wing_values = (
+                        df["wing"]
+                        .dropna()
+                        .astype(str)
+                        .str.strip()
+                        .replace("None", "")
+                        .unique()
+                        .tolist()
+                    )
+                    wing_values = sorted([w for w in wing_values if w != ""])
+                    wing_options = ["ALL"] + wing_values
+
+                    st.selectbox(
+                        "Wing (fixed)",
+                        wing_options,
+                        key="tab5_wing",
+                        help="Always applied. Choose ALL to include all wings.",
+                    )
+
+                    # Choose ONE variable filter
+                    var_fields = [
+                        "ALL (no extra filter)",
+                        "Customer",
+                        "Flat Address (contains)",
+                        "Customer Name (contains)",
+                        "Stamp Duty",
+                        "Agreement Done",
+                        "Incentive",
+                        "Insider Banker",
+                        "Outsider Banker",
+                        "Offer 1 (Has/Rewarded)",
+                        "Offer 2 (Has/Rewarded)",
+                    ]
+
+                    st.selectbox(
+                        "Additional filter (only one active):",
+                        options=var_fields,
+                        index=(
+                            var_fields.index(st.session_state.tab5_filter_field)
+                            if st.session_state.tab5_filter_field in var_fields
+                            else 0
+                        ),
+                        key="tab5_filter_field",
+                    )
+
+                    # Render chosen variable filter control
+                    ff = st.session_state.tab5_filter_field
+
+                    if ff == "Customer":
+                        st.selectbox(
+                            "Customer (Wing Flat – Name)",
+                            options=customer_options,
+                            index=cust_default_idx,
+                            key="tab5_customer",
+                        )
+
+                    elif ff == "Flat Address (contains)":
+                        st.text_input(
+                            "Address contains…",
+                            key="tab5_addr_contains",
+                        )
+
+                    elif ff == "Customer Name (contains)":
+                        st.text_input(
+                            "Customer name contains…",
+                            key="tab5_name_contains",
+                        )
+
+                    elif ff == "Stamp Duty":
+                        st.selectbox(
+                            "Stamp Duty Status",
+                            ["Received", "Pending"],
+                            key="tab5_stamp_choice",
+                        )
+
+                    elif ff == "Agreement Done":
+                        st.selectbox(
+                            "Agreement Status",
+                            ["Done", "Pending"],
+                            key="tab5_agree_choice",
+                        )
+
+                    elif ff == "Incentive":
+                        st.selectbox(
+                            "Incentive Status",
+                            ["Given", "Pending"],
+                            key="tab5_incentive_choice",
+                        )
+
+                    elif ff == "Insider Banker":
+                        st.selectbox(
+                            "Insider Banker",
+                            ["Yes", "No"],
+                            key="tab5_insider_choice",
+                        )
+
+                    elif ff == "Outsider Banker":
+                        st.selectbox(
+                            "Outsider Banker",
+                            ["Yes", "No"],
+                            key="tab5_outsider_choice",
+                        )
+
+                    elif ff == "Offer 1 (Has/Rewarded)":
+                        st.selectbox(
+                            "Offer 1 Filter",
+                            ["Has Offer", "No Offer", "Rewarded", "Not Rewarded"],
+                            key="tab5_o1_choice",
+                        )
+
+                    elif ff == "Offer 2 (Has/Rewarded)":
+                        st.selectbox(
+                            "Offer 2 Filter",
+                            ["Has Offer", "No Offer", "Rewarded", "Not Rewarded"],
+                            key="tab5_o2_choice",
+                        )
+
+                    c1, c2 = st.columns(2)
+
+                    with c1:
+                        st.form_submit_button(
+                            "Find",
+                            on_click=_tab5_apply_filters,
+                        )
+
+                    with c2:
+                        st.form_submit_button(
+                            "Reset",
+                            on_click=_tab5_reset_filters,
+                        )
+
+                # -------------------- RESULTS --------------------
+                if not st.session_state.tab5_filters_active:
+                    st.info(
+                        "Set Month, Sales Executive & Wing (fixed), "
+                        "choose one additional filter, then click **Find**."
+                    )
+
+                else:
+                    # Start with base fixed filters
+                    post_df = df.copy()
+
+                    if st.session_state.tab5_month != "ALL":
+                        post_df = post_df[
+                            post_df["month"].astype(str)
+                            == str(st.session_state.tab5_month)
+                        ]
+
+                    if st.session_state.tab5_exec != "ALL":
+                        post_df = post_df[
+                            post_df["sales_executive"].astype(str)
+                            == str(st.session_state.tab5_exec)
+                        ]
+
+                    if st.session_state.tab5_wing != "ALL":
+                        post_df = post_df[
+                            post_df["wing"].astype(str).str.strip()
+                            == str(st.session_state.tab5_wing)
+                        ]
+
+                    # Apply exactly ONE additional filter
+                    ff = st.session_state.tab5_filter_field
+
+                    if ff == "Customer" and st.session_state.tab5_customer != "ALL":
+                        label_map = {
+                            idx: make_label(r) for idx, r in post_df.iterrows()
+                        }
+
+                        chosen = [
+                            i
+                            for i, lab in label_map.items()
+                            if lab == st.session_state.tab5_customer
+                        ]
+
+                        post_df = post_df.loc[chosen]
+
+                    elif ff == "Flat Address (contains)":
+                        q = st.session_state.tab5_addr_contains.strip().lower()
+
+                        if q:
+                            post_df = post_df[
+                                post_df["flat_address"]
+                                .astype(str)
+                                .str.lower()
+                                .str.contains(q, na=False)
+                            ]
+
+                    elif ff == "Customer Name (contains)":
+                        q = st.session_state.tab5_name_contains.strip().lower()
+
+                        if q:
+                            post_df = post_df[
+                                post_df["customer_name"]
+                                .astype(str)
+                                .str.lower()
+                                .str.contains(q, na=False)
+                            ]
+
+                    elif ff == "Stamp Duty":
+                        want_received = (
+                            st.session_state.tab5_stamp_choice == "Received"
+                        )
+
+                        post_df = post_df[
+                            post_df["stamp_duty"].apply(
+                                lambda v: _norm(v) == "received"
+                            )
+                            == want_received
+                        ]
+
+                    elif ff == "Agreement Done":
+                        want_done = st.session_state.tab5_agree_choice == "Done"
+
+                        post_df = post_df[
+                            post_df["agreement_done"].apply(
+                                lambda v: _norm(v) == "done"
+                            )
+                            == want_done
+                        ]
+
+                    elif ff == "Incentive":
+                        want_given = (
+                            st.session_state.tab5_incentive_choice == "Given"
+                        )
+
+                        post_df = post_df[
+                            post_df["incentive"].apply(
+                                lambda v: _norm(v) == "given"
+                            )
+                            == want_given
+                        ]
+
+                    elif ff == "Insider Banker":
+                        want_yes = st.session_state.tab5_insider_choice == "Yes"
+
+                        post_df = post_df[
+                            post_df["insider_banker"].apply(
+                                lambda v: _norm(v) == "yes"
+                            )
+                            == want_yes
+                        ]
+
+                    elif ff == "Outsider Banker":
+                        want_yes = st.session_state.tab5_outsider_choice == "Yes"
+
+                        post_df = post_df[
+                            post_df["outsider_banker"].apply(
+                                lambda v: _norm(v) == "yes"
+                            )
+                            == want_yes
+                        ]
+
+                    elif ff == "Offer 1 (Has/Rewarded)":
+                        choice = st.session_state.tab5_o1_choice
+
+                        if choice == "Has Offer":
+                            post_df = post_df[
+                                post_df["offer_1"]
+                                .fillna("")
+                                .astype(str)
+                                .str.strip()
+                                != ""
+                            ]
+
+                        elif choice == "No Offer":
+                            post_df = post_df[
+                                post_df["offer_1"]
+                                .fillna("")
+                                .astype(str)
+                                .str.strip()
+                                == ""
+                            ]
+
+                        elif choice == "Rewarded":
+                            post_df = post_df[
+                                post_df["offer_1_rewarded"].apply(
+                                    lambda x: _norm(x)
+                                    in (
+                                        "rewarded 1",
+                                        "true",
+                                        "yes",
+                                        "1",
+                                        "y",
+                                        "✓",
+                                    )
+                                )
+                            ]
+
+                        elif choice == "Not Rewarded":
+                            post_df = post_df[
+                                ~post_df["offer_1_rewarded"].apply(
+                                    lambda x: _norm(x)
+                                    in (
+                                        "rewarded 1",
+                                        "true",
+                                        "yes",
+                                        "1",
+                                        "y",
+                                        "✓",
+                                    )
+                                )
+                            ]
+
+                    elif ff == "Offer 2 (Has/Rewarded)":
+                        choice = st.session_state.tab5_o2_choice
+
+                        if choice == "Has Offer":
+                            post_df = post_df[
+                                post_df["offer_2"]
+                                .fillna("")
+                                .astype(str)
+                                .str.strip()
+                                != ""
+                            ]
+
+                        elif choice == "No Offer":
+                            post_df = post_df[
+                                post_df["offer_2"]
+                                .fillna("")
+                                .astype(str)
+                                .str.strip()
+                                == ""
+                            ]
+
+                        elif choice == "Rewarded":
+                            post_df = post_df[
+                                post_df["offer_2_rewarded"].apply(
+                                    lambda x: _norm(x)
+                                    in (
+                                        "rewarded 2",
+                                        "true",
+                                        "yes",
+                                        "1",
+                                        "y",
+                                        "✓",
+                                    )
+                                )
+                            ]
+
+                        elif choice == "Not Rewarded":
+                            post_df = post_df[
+                                ~post_df["offer_2_rewarded"].apply(
+                                    lambda x: _norm(x)
+                                    in (
+                                        "rewarded 2",
+                                        "true",
+                                        "yes",
+                                        "1",
+                                        "y",
+                                        "✓",
+                                    )
+                                )
+                            ]
+
+                    # UI header labels
+                    month_label = (
+                        st.session_state.tab5_month
+                        if st.session_state.tab5_month != "ALL"
+                        else "All Months"
+                    )
+
+                    exec_label = (
+                        st.session_state.tab5_exec
+                        if st.session_state.tab5_exec != "ALL"
+                        else "All Executives"
+                    )
+
+                    wing_label = (
+                        st.session_state.tab5_wing
+                        if st.session_state.tab5_wing != "ALL"
+                        else "All Wings"
+                    )
+
+                    extra = st.session_state.tab5_filter_field
+
+                    if extra == "Customer":
+                        extra += f" = {st.session_state.tab5_customer}"
+
+                    elif extra == "Flat Address (contains)":
+                        extra += f" '{st.session_state.tab5_addr_contains}'"
+
+                    elif extra == "Customer Name (contains)":
+                        extra += f" '{st.session_state.tab5_name_contains}'"
+
+                    elif extra == "Stamp Duty":
+                        extra += f" = {st.session_state.tab5_stamp_choice}"
+
+                    elif extra == "Agreement Done":
+                        extra += f" = {st.session_state.tab5_agree_choice}"
+
+                    elif extra == "Incentive":
+                        extra += f" = {st.session_state.tab5_incentive_choice}"
+
+                    elif extra == "Insider Banker":
+                        extra += f" = {st.session_state.tab5_insider_choice}"
+
+                    elif extra == "Outsider Banker":
+                        extra += f" = {st.session_state.tab5_outsider_choice}"
+
+                    elif extra == "Offer 1 (Has/Rewarded)":
+                        extra += f" = {st.session_state.tab5_o1_choice}"
+
+                    elif extra == "Offer 2 (Has/Rewarded)":
+                        extra += f" = {st.session_state.tab5_o2_choice}"
+
+                    st.subheader(
+                        f"Customers • {month_label} • {exec_label} • "
+                        f"{wing_label} • {extra}"
+                    )
+
+                    if post_df.empty:
+                        st.info("No customers match the selected filters.")
+
+                    else:
+                        updated_any = False
+
+                        # Header
+                        h = st.columns([2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3])
+
+                        h[0].markdown("**Flat Address**")
+                        h[1].markdown("**Customer Name**")
+                        h[2].markdown("**Stamp Duty**")
+                        h[3].markdown("**Agreement**")
+                        h[4].markdown("**Incentive**")
+                        h[5].markdown("**RCC**")
+                        h[6].markdown("**Possession Handover**")
+                        h[7].markdown("**Referral Given**")
+                        h[8].markdown("**Insider Banker**")
+                        h[9].markdown("**Outsider Banker**")
+                        h[10].markdown("**Offer 1**")
+                        h[11].markdown("**Offer 2**")
+
+                        # Rows
+                        for idx, row in post_df.iterrows():
+                            booking_id = row.get("id")
+
+                            if pd.isna(booking_id):
+                                continue
+
+                            flat_addr = row.get("flat_address", "")
+                            cust_name = row.get("customer_name", "")
+
+                            is_agreement_done = (
+                                _norm(row.get("agreement_done", "")) == "done"
+                            )
+
+                            is_stamp_received = (
+                                _norm(row.get("stamp_duty", "")) == "received"
+                            )
+
+                            is_incentive_given = (
+                                _norm(row.get("incentive", "")) == "given"
+                            )
+
+                            is_referral_given = (
+                                _norm(row.get("referral_given", "")) == "given"
+                            )
+
+                            is_rcc_completed = (
+                                _norm(row.get("rcc", "")) == "completed"
+                            )
+
+                            is_poss_handover = (
+                                _norm(row.get("possession_handover", ""))
+                                == "handover"
+                            )
+
+                            is_referral_lead = (
+                                _norm(row.get("lead_type", "")) == "referral"
+                            )
+
+                            is_insider = (
+                                _norm(row.get("insider_banker", "")) == "yes"
+                            )
+
+                            is_outsider = (
+                                _norm(row.get("outsider_banker", "")) == "yes"
+                            )
+
+                            offer1_text = str(row.get("offer_1", "") or "").strip()
+                            offer2_text = str(row.get("offer_2", "") or "").strip()
+
+                            has_offer1 = offer1_text != ""
+                            has_offer2 = offer2_text != ""
+
+                            o1_cell = _norm(row.get("offer_1_rewarded", "") or "")
+                            o2_cell = _norm(row.get("offer_2_rewarded", "") or "")
+
+                            is_o1_rewarded = o1_cell in (
+                                "rewarded 1",
+                                "true",
+                                "yes",
+                                "1",
+                                "y",
+                                "✓",
+                            )
+
+                            is_o2_rewarded = o2_cell in (
+                                "rewarded 2",
+                                "true",
+                                "yes",
+                                "1",
+                                "y",
+                                "✓",
+                            )
+
+                            (
+                                col0,
+                                col1,
+                                col2,
+                                col3,
+                                col4,
+                                col5,
+                                col6,
+                                col7,
+                                col8,
+                                col9,
+                                col10,
+                                col11,
+                            ) = st.columns([2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3])
+
+                            col0.write(flat_addr)
+                            col1.write(cust_name)
+
+                            stamp_checked = col2.checkbox(
+                                "Received",
+                                value=is_stamp_received,
+                                key=f"tab5_stamp_{booking_id}",
+                            )
+
+                            agreement_checked = col3.checkbox(
+                                "Done",
+                                value=is_agreement_done,
+                                key=f"tab5_agree_{booking_id}",
+                            )
+
+                            incentive_checked = col4.checkbox(
+                                "Given",
+                                value=is_incentive_given,
+                                key=f"tab5_incentive_{booking_id}",
+                            )
+
+                            rcc_checked = col5.checkbox(
+                                "Completed",
+                                value=is_rcc_completed,
+                                key=f"tab5_rcc_{booking_id}",
+                            )
+
+                            pos_checked = col6.checkbox(
+                                "Handover",
+                                value=is_poss_handover,
+                                key=f"tab5_pos_{booking_id}",
+                            )
+
+                            # Referral checkbox only for referral leads
+                            if is_referral_lead:
+                                referral_checked = col7.checkbox(
+                                    "Given",
+                                    value=is_referral_given,
+                                    key=f"tab5_referral_{booking_id}",
+                                )
+                            else:
+                                col7.write("Given" if is_referral_given else "—")
+                                referral_checked = is_referral_given
+
+                            insider_checked = col8.checkbox(
+                                "Yes",
+                                value=is_insider,
+                                key=f"tab5_insider_{booking_id}",
+                            )
+
+                            outsider_checked = col9.checkbox(
+                                "Yes",
+                                value=is_outsider,
+                                key=f"tab5_outsider_{booking_id}",
+                            )
+
+                            # Offer 1
+                            if has_offer1:
+                                o1_checked = col10.checkbox(
+                                    offer1_text,
+                                    value=is_o1_rewarded,
+                                    key=(
+                                        f"tab5_offer1_{booking_id}_"
+                                        f"{1 if is_o1_rewarded else 0}"
+                                    ),
+                                )
+                            else:
+                                col10.write("—")
+                                o1_checked = is_o1_rewarded
+
+                            # Offer 2
+                            if has_offer2:
+                                o2_checked = col11.checkbox(
+                                    offer2_text,
+                                    value=is_o2_rewarded,
+                                    key=(
+                                        f"tab5_offer2_{booking_id}_"
+                                        f"{1 if is_o2_rewarded else 0}"
+                                    ),
+                                )
+                            else:
+                                col11.write("—")
+                                o2_checked = is_o2_rewarded
+
+                            # Collect updates for this row
+                            updates = {}
+
+                            # Same logic as Google Sheets version:
+                            # These statuses are set when checked.
+                            # Unchecking does not reverse them.
+                            if stamp_checked and row.get("stamp_duty") != "Received":
+                                updates["stamp_duty"] = "Received"
+
+                            if (
+                                agreement_checked
+                                and row.get("agreement_done") != "Done"
+                            ):
+                                updates["agreement_done"] = "Done"
+
+                            if (
+                                incentive_checked
+                                and row.get("incentive") != "Given"
+                            ):
+                                updates["incentive"] = "Given"
+
+                            if rcc_checked and row.get("rcc") != "Completed":
+                                updates["rcc"] = "Completed"
+
+                            if (
+                                pos_checked
+                                and row.get("possession_handover") != "Handover"
+                            ):
+                                updates["possession_handover"] = "Handover"
+
+                            if (
+                                is_referral_lead
+                                and referral_checked
+                                and row.get("referral_given") != "Given"
+                            ):
+                                updates["referral_given"] = "Given"
+
+                            if (
+                                insider_checked
+                                and row.get("insider_banker") != "Yes"
+                            ):
+                                updates["insider_banker"] = "Yes"
+
+                            if (
+                                outsider_checked
+                                and row.get("outsider_banker") != "Yes"
+                            ):
+                                updates["outsider_banker"] = "Yes"
+
+                            # Offers allow toggle:
+                            # checked = Rewarded, unchecked = blank
+                            if has_offer1:
+                                new_o1_val = "Rewarded 1" if o1_checked else ""
+
+                                if row.get("offer_1_rewarded") != new_o1_val:
+                                    updates["offer_1_rewarded"] = new_o1_val
+
+                            if has_offer2:
+                                new_o2_val = "Rewarded 2" if o2_checked else ""
+
+                                if row.get("offer_2_rewarded") != new_o2_val:
+                                    updates["offer_2_rewarded"] = new_o2_val
+
+                            # Push row update to Supabase
+                            if updates:
+                                try:
+                                    update_booking_status(booking_id, updates)
+                                    updated_any = True
+
+                                    if "agreement_done" in updates:
+                                        st.balloons()
+                                        st.markdown(
+                                            f"""
+                                            <div style='text-align: center; padding: 40px 0;'>
+                                                <h1 style='font-size: 60px;'>🎉 CONGRATULATIONS 🎉</h1>
+                                                <h2 style='font-size: 40px;'>Agreement Done for
+                                                    <span style='color: #1f77b4;'>{cust_name}</span>
+                                                </h2>
+                                            </div>
+                                            """,
+                                            unsafe_allow_html=True,
+                                        )
+
+                                except Exception as e:
+                                    st.error(
+                                        f"❌ Failed to update booking ID {booking_id}: {str(e)}"
+                                    )
+
+                        if updated_any:
+                            st.success("✅ Status updated in Supabase.")
+
+                st.caption(
+                    "**Note:** Month, Sales Executive & Wing are fixed filters "
+                    "(always applied). Exactly one additional filter from the form "
+                    "is applied at a time. Checkboxes update the Supabase table."
+                )
