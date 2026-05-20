@@ -596,21 +596,6 @@ if selected_main_section == "Booking Punch":
 
             agreement_cost = float(st.session_state.agreement_cost)
 
-            # --- SLAB CALCULATIONS ---
-            booking_amount = round(agreement_cost * 0.05)
-            agreement = round(agreement_cost * 0.10)
-            plinth = round(agreement_cost * 0.15)
-            third_floor = round(agreement_cost * 0.075)
-            seventh_floor = round(agreement_cost * 0.075)
-            tenth_floor = round(agreement_cost * 0.075)
-            thirteenth_floor = round(agreement_cost * 0.075)
-            flooring = round(agreement_cost * 0.075)
-            plastering = round(agreement_cost * 0.075)
-            plumbing = round(agreement_cost * 0.075)
-            electrical = round(agreement_cost * 0.075)
-            sanitary_lift = round(agreement_cost * 0.05)
-            possession = round(agreement_cost * 0.05)
-
             parking_text = _parking_text()
 
             # Supabase row for public.bookings
@@ -644,19 +629,6 @@ if selected_main_section == "Booking Punch":
                 "outsider_banker": None,
 
                 "carpet_area": float(st.session_state.get("booking_carpet_area_main")),
-                "booking_amount": booking_amount,
-                "agreement": agreement,
-                "plinth": plinth,
-                "third_floor": third_floor,
-                "seventh_floor": seventh_floor,
-                "tenth_floor": tenth_floor,
-                "thirteenth_floor": thirteenth_floor,
-                "flooring": flooring,
-                "plastering": plastering,
-                "plumbing": plumbing,
-                "electrical": electrical,
-                "sanitary_lift": sanitary_lift,
-                "possession": possession,
 
                 "first_visit_date": first_visit_date_obj.isoformat(),
                 "conversion_period_days": int(_days_gap),
@@ -677,7 +649,7 @@ if selected_main_section == "Booking Punch":
             except Exception:
                 pass
 
-            st.success("🎉 Booking, Conversion Period, Slabs & Remarks submitted successfully to Supabase!")
+            st.success("🎉 Booking, Conversion Period & Remarks submitted successfully to Supabase!")
 
             # ---- Reset ----
             _reset_booking_form_state()
