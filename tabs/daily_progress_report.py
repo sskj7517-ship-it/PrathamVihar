@@ -116,6 +116,57 @@ def _dpr_status_done(series):
     )
 
 
+def _dpr_status_present_series(series):
+    if series is None:
+        return pd.Series(dtype=bool)
+
+    false_values = {
+        "",
+        "pending",
+        "not received",
+        "not recieved",
+        "not done",
+        "not given",
+        "no",
+        "n",
+        "false",
+        "0",
+        "na",
+        "n/a",
+        "nan",
+        "nat",
+        "none",
+        "null",
+        "-",
+    }
+
+    return ~series.fillna("").astype(str).str.strip().str.lower().isin(false_values)
+
+
+def _dpr_status_count_until(df: pd.DataFrame, col: str | None, target_date: _dt.date) -> int:
+    if df is None or df.empty or not col:
+        return 0
+
+    status_values = df[col]
+    parsed_dates = _dpr_date_series(status_values)
+    has_date = parsed_dates.notna()
+    date_done = has_date & (parsed_dates.dt.date <= target_date)
+
+    # Old text values are treated as completed for overall totals. The SQL
+    # migration converts those old remarks to yesterday's date.
+    old_text_done = (~has_date) & _dpr_status_present_series(status_values)
+
+    return int((date_done | old_text_done).sum())
+
+
+def _dpr_status_count_on_date(df: pd.DataFrame, col: str | None, target_date: _dt.date) -> int:
+    if df is None or df.empty or not col:
+        return 0
+
+    parsed_dates = _dpr_date_series(df[col])
+    return int((parsed_dates.notna() & (parsed_dates.dt.date == target_date)).sum())
+
+
 def _dpr_page_css():
     st.markdown(
         """
@@ -326,7 +377,15 @@ def _dpr_build_inventory_table():
         return pd.DataFrame()
 
 
-def _dpr_build_sales_data(bookings_df: pd.DataFrame, target_date: _dt.date):
+def _dpr_fetch_raw_bookings_for_report(supabase_client) -> pd.DataFrame:
+    try:
+        response = supabase_client.table("bookings").select("*").execute()
+        return pd.DataFrame(response.data or [])
+    except Exception:
+        return pd.DataFrame()
+
+
+def _dpr_build_sales_data(bookings_df: pd.DataFrame, target_date: _dt.date, raw_bookings_df=None):
     if bookings_df is None or bookings_df.empty:
         return {
             "warning": "No booking data available.",
@@ -345,6 +404,10 @@ def _dpr_build_sales_data(bookings_df: pd.DataFrame, target_date: _dt.date):
     stamp_col = _dpr_col(df, "stamp_duty", "Stamp Duty")
     agreement_col = _dpr_col(df, "agreement_done", "Agreement Done")
 
+    status_df = raw_bookings_df.copy() if isinstance(raw_bookings_df, pd.DataFrame) and not raw_bookings_df.empty else df.copy()
+    status_stamp_col = _dpr_col(status_df, "stamp_duty", "Stamp Duty")
+    status_agreement_col = _dpr_col(status_df, "agreement_done", "Agreement Done")
+
     if date_col:
         df["_date"] = _dpr_date_series(df[date_col])
         today_df = df[df["_date"].dt.date == target_date].copy()
@@ -354,12 +417,12 @@ def _dpr_build_sales_data(bookings_df: pd.DataFrame, target_date: _dt.date):
         till_df = df.copy()
 
     total_bookings_till_date = int(len(till_df))
-    stamp_till_date = int(_dpr_status_done(till_df[stamp_col]).sum()) if stamp_col else 0
-    agreement_till_date = int(_dpr_status_done(till_df[agreement_col]).sum()) if agreement_col else 0
+    stamp_till_date = _dpr_status_count_until(status_df, status_stamp_col, target_date)
+    agreement_till_date = _dpr_status_count_until(status_df, status_agreement_col, target_date)
 
     today_bookings = int(len(today_df))
-    today_stamp = int(_dpr_status_done(today_df[stamp_col]).sum()) if stamp_col and not today_df.empty else 0
-    today_agreement = int(_dpr_status_done(today_df[agreement_col]).sum()) if agreement_col and not today_df.empty else 0
+    today_stamp = _dpr_status_count_on_date(status_df, status_stamp_col, target_date)
+    today_agreement = _dpr_status_count_on_date(status_df, status_agreement_col, target_date)
 
     show_cols = [c for c in [exec_col, wing_col, flat_col, type_col] if c]
     if not today_df.empty and show_cols:
@@ -511,7 +574,7 @@ def _dpr_build_construction_data(supabase_client, target_date: _dt.date):
     staff = pd.DataFrame()
     labour = pd.DataFrame()
     staff_cols = ["project_manager", "senior_engineer", "junior_engineer", "supervisor"]
-    labour_cols = ["carpenter", "fitter", "mason", "unskilled", "others"]
+    labour_cols = ["carpenter", "fitter", "mason", "skilled", "unskilled", "others"]
 
     if not labour_today.empty:
         for col in staff_cols + labour_cols:
@@ -543,6 +606,7 @@ def _dpr_build_construction_data(supabase_client, target_date: _dt.date):
                     "carpenter": "Carpenter",
                     "fitter": "Fitter",
                     "mason": "Mason",
+                    "skilled": "Skilled",
                     "unskilled": "Unskilled",
                     "others": "Others",
                 })
@@ -558,13 +622,19 @@ def _dpr_build_construction_data(supabase_client, target_date: _dt.date):
     if not concrete_today.empty:
         if "concrete_quantity_m3" not in concrete_today.columns:
             concrete_today["concrete_quantity_m3"] = 0
+        if "concrete_grade" not in concrete_today.columns:
+            concrete_today["concrete_grade"] = ""
+        concrete_today["wing"] = concrete_today["wing"].fillna("").astype(str).str.strip()
+        concrete_today["work"] = concrete_today["work"].fillna("").astype(str).str.strip()
+        concrete_today["concrete_grade"] = concrete_today["concrete_grade"].fillna("").astype(str).str.strip()
         concrete_today["concrete_quantity_m3"] = pd.to_numeric(concrete_today["concrete_quantity_m3"], errors="coerce").fillna(0)
         concrete_summary = (
-            concrete_today.groupby(["wing", "work"], as_index=False)["concrete_quantity_m3"]
+            concrete_today.groupby(["wing", "work", "concrete_grade"], as_index=False)["concrete_quantity_m3"]
             .sum()
             .rename(columns={
                 "wing": "Wing",
                 "work": "Work",
+                "concrete_grade": "Grade",
                 "concrete_quantity_m3": "Concrete Quantity (M3)",
             })
         )
@@ -578,7 +648,7 @@ def _dpr_build_construction_data(supabase_client, target_date: _dt.date):
         work_done_df = work_done_df.sort_values(["Wing", "Floor / Level", "Main Work"]).reset_index(drop=True)
 
     total_staff = int(staff[[c for c in ["Project Manager", "Senior Engineer", "Junior Engineer", "Supervisor"] if c in staff.columns]].sum().sum()) if not staff.empty else 0
-    total_labour = int(labour[[c for c in ["Carpenter", "Fitter", "Mason", "Unskilled", "Others"] if c in labour.columns]].sum().sum()) if not labour.empty else 0
+    total_labour = int(labour[[c for c in ["Carpenter", "Fitter", "Mason", "Skilled", "Unskilled", "Others"] if c in labour.columns]].sum().sum()) if not labour.empty else 0
     concrete_total = float(concrete_summary["Concrete Quantity (M3)"].sum()) if not concrete_summary.empty else 0.0
 
     active_wings = set()
@@ -988,12 +1058,13 @@ else:
         if "booking_df" in globals() and isinstance(booking_df, pd.DataFrame)
         else pd.DataFrame()
     )
+    raw_bookings_source = _dpr_fetch_raw_bookings_for_report(supabase_client)
 
     _dpr_hero(report_date)
 
     with st.spinner("Preparing director report..."):
         report_parts = {
-            "sales": _dpr_build_sales_data(bookings_source, report_date),
+            "sales": _dpr_build_sales_data(bookings_source, report_date, raw_bookings_source),
             "cashflow": _dpr_build_cashflow_data(bookings_source),
             "construction": _dpr_build_construction_data(supabase_client, report_date),
         }
