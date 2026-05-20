@@ -1,3 +1,12 @@
+import base64
+import datetime as _dt
+import re
+
+import pandas as pd
+import streamlit as st
+from fpdf import FPDF
+
+
 _run_app_file("app_parts/construction_progress_core.py")
 _run_app_file("tabs/inventory_status.py")
 
@@ -12,11 +21,13 @@ def _dpr_norm_col(name: str) -> str:
 def _dpr_col(df: pd.DataFrame, *names):
     if df is None or df.empty:
         return None
+
     lookup = {_dpr_norm_col(c): c for c in df.columns}
     for name in names:
         hit = lookup.get(_dpr_norm_col(name))
         if hit:
             return hit
+
     return None
 
 
@@ -24,21 +35,49 @@ def _dpr_to_num(value):
     try:
         if pd.isna(value):
             return 0.0
-        return float(str(value).replace(",", "").replace("₹", "").replace("Rs", "").strip())
+
+        return float(
+            str(value)
+            .replace(",", "")
+            .replace("₹", "")
+            .replace("Rs", "")
+            .replace("INR", "")
+            .strip()
+        )
     except Exception:
         return 0.0
 
 
 def _dpr_date_series(series):
+    if series is None:
+        return pd.Series(dtype="datetime64[ns]")
+
     def parse_one(v):
         if pd.isna(v) or str(v).strip() == "":
             return pd.NaT
+
         s = str(v).strip()
+
+        # Supabase date columns arrive as YYYY-MM-DD. Keep this path strict so
+        # 2026-03-05 is always shown as 05/03/2026, never 03/05/2026.
         if re.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$", s):
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+                try:
+                    return pd.Timestamp(_dt.datetime.strptime(s, fmt)).normalize()
+                except Exception:
+                    pass
             return pd.to_datetime(s, errors="coerce")
+
         return pd.to_datetime(s, errors="coerce", dayfirst=True)
 
     return series.apply(parse_one)
+
+
+def _dpr_date_label(value):
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return "-"
+    return parsed.strftime("%d/%m/%Y")
 
 
 def _dpr_fetch_table(supabase_client, table_name: str) -> pd.DataFrame:
@@ -59,6 +98,9 @@ def _dpr_fmt_num(value):
 
 
 def _dpr_status_done(series):
+    if series is None:
+        return pd.Series(dtype=bool)
+
     return (
         series.fillna("")
         .astype(str)
@@ -68,12 +110,225 @@ def _dpr_status_done(series):
     )
 
 
-def _dpr_sales_section(bookings_df: pd.DataFrame, target_date: _dt.date):
-    st.markdown("## Sales")
+def _dpr_page_css():
+    st.markdown(
+        """
+        <style>
+          .dpr-hero {
+            border: 1px solid #dbe4ee;
+            background: linear-gradient(135deg, #f8fbff 0%, #eef6ff 52%, #f7f7ff 100%);
+            border-radius: 18px;
+            padding: 24px 22px 20px;
+            text-align: center;
+            margin: 8px 0 18px;
+            box-shadow: 0 14px 32px rgba(15, 23, 42, 0.07);
+          }
+          .dpr-hero h1 {
+            margin: 0;
+            color: #0f172a;
+            font-size: 30px;
+            font-weight: 900;
+            letter-spacing: 0;
+          }
+          .dpr-hero p {
+            margin: 8px 0 0;
+            color: #475569;
+            font-size: 15px;
+            font-weight: 650;
+          }
+          .dpr-section {
+            text-align: center;
+            margin: 26px 0 14px;
+          }
+          .dpr-section h2 {
+            margin: 0;
+            font-size: 23px;
+            font-weight: 900;
+            color: #111827;
+            letter-spacing: 0;
+          }
+          .dpr-section div {
+            display: inline-block;
+            width: 84px;
+            height: 3px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #2563eb, #14b8a6);
+            margin-top: 8px;
+          }
+          .dpr-kpi {
+            min-height: 116px;
+            border: 1px solid #dbe4ee;
+            border-radius: 16px;
+            background: #ffffff;
+            padding: 14px 15px;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+            margin-bottom: 12px;
+          }
+          .dpr-kpi.blue { background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%); }
+          .dpr-kpi.green { background: linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%); }
+          .dpr-kpi.amber { background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%); }
+          .dpr-kpi.slate { background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%); }
+          .dpr-kpi h6 {
+            margin: 0;
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+          }
+          .dpr-kpi p {
+            margin: 8px 0 0;
+            color: #0f172a;
+            font-size: 26px;
+            line-height: 1.12;
+            font-weight: 950;
+          }
+          .dpr-kpi span {
+            display: block;
+            margin-top: 7px;
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 650;
+          }
+          .dpr-table-title {
+            margin: 18px 0 8px;
+            color: #1f2937;
+            font-size: 16px;
+            font-weight: 900;
+          }
+          .dpr-download-box {
+            border: 1px solid #bfdbfe;
+            background: #eff6ff;
+            color: #1e3a8a;
+            border-radius: 14px;
+            padding: 12px 14px;
+            font-weight: 750;
+            margin: 8px 0 16px;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    if bookings_df is None or bookings_df.empty:
-        st.warning("No booking data available.")
+
+def _dpr_hero(report_date: _dt.date):
+    st.markdown(
+        f"""
+        <div class="dpr-hero">
+          <h1>Daily Progress Report</h1>
+          <p>Pratham Vihar | Report Date: {_dpr_date_label(report_date)}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _dpr_section_title(title: str):
+    st.markdown(
+        f"""
+        <div class="dpr-section">
+          <h2>{title}</h2>
+          <div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _dpr_metric(label, value, note="", tone="slate"):
+    return {
+        "label": label,
+        "value": value,
+        "note": note,
+        "tone": tone,
+    }
+
+
+def _dpr_render_kpis(items, columns=4):
+    if not items:
+        return
+
+    cols = st.columns(columns)
+    for idx, item in enumerate(items):
+        with cols[idx % columns]:
+            st.markdown(
+                f"""
+                <div class="dpr-kpi {item.get('tone', 'slate')}">
+                  <h6>{item.get('label', '')}</h6>
+                  <p>{item.get('value', '')}</p>
+                  <span>{item.get('note', '')}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+def _dpr_display_table(title: str, df: pd.DataFrame, empty_message: str, height=None):
+    st.markdown(f'<div class="dpr-table-title">{title}</div>', unsafe_allow_html=True)
+
+    if df is None or df.empty:
+        st.info(empty_message)
+        return
+
+    kwargs = {"use_container_width": True, "hide_index": True}
+    if height:
+        kwargs["height"] = height
+
+    st.dataframe(df, **kwargs)
+
+
+def _dpr_bookings_until(df: pd.DataFrame, date_col: str | None, target_date: _dt.date):
+    if df is None or df.empty or not date_col:
+        return df.copy() if df is not None else pd.DataFrame()
+
+    out = df.copy()
+    out["_date"] = _dpr_date_series(out[date_col])
+    mask = out["_date"].isna() | (out["_date"].dt.date <= target_date)
+    return out[mask].copy()
+
+
+def _dpr_build_inventory_table():
+    if "booking_df" not in globals() or "hold_df" not in globals():
         return pd.DataFrame()
+
+    try:
+        inventory_df = _build_inventory_status_df(booking_df, hold_df)
+        inv = inventory_df[inventory_df["Base Category"].eq("OUR")].copy()
+        rows = []
+
+        sold_statuses = [
+            "BOOKED_PENDING",
+            "STAMP_DUTY_RECEIVED",
+            "AGREEMENT_LINEUP",
+            "AGREEMENT_DONE",
+        ]
+
+        for wing, wing_df in inv.groupby("Wing"):
+            total_units = int(len(wing_df))
+            sold_units = int(wing_df["Internal Status"].isin(sold_statuses).sum())
+            balance_units = max(total_units - sold_units, 0)
+            rows.append({
+                "Wing": wing,
+                "Our Inventory": total_units,
+                "Sold": sold_units,
+                "Balance": balance_units,
+            })
+
+        return pd.DataFrame(rows).sort_values("Wing").reset_index(drop=True) if rows else pd.DataFrame()
+    except Exception as exc:
+        st.warning(f"Could not build inventory summary: {exc}")
+        return pd.DataFrame()
+
+
+def _dpr_build_sales_data(bookings_df: pd.DataFrame, target_date: _dt.date):
+    if bookings_df is None or bookings_df.empty:
+        return {
+            "warning": "No booking data available.",
+            "overall_metrics": [],
+            "today_metrics": [],
+            "inventory_df": pd.DataFrame(),
+            "bookings_today_df": pd.DataFrame(),
+        }
 
     df = bookings_df.copy()
     date_col = _dpr_col(df, "booking_date", "Date", "Booking Date")
@@ -84,60 +339,59 @@ def _dpr_sales_section(bookings_df: pd.DataFrame, target_date: _dt.date):
     stamp_col = _dpr_col(df, "stamp_duty", "Stamp Duty")
     agreement_col = _dpr_col(df, "agreement_done", "Agreement Done")
 
-    if not date_col:
-        st.warning("Booking date column not found.")
-        return pd.DataFrame()
-
-    df["_date"] = _dpr_date_series(df[date_col])
-    today_df = df[df["_date"].dt.date == target_date].copy()
-
-    total_bookings = len(today_df)
-    stamp_received = int(_dpr_status_done(today_df[stamp_col]).sum()) if stamp_col and not today_df.empty else 0
-    agreement_done = int(_dpr_status_done(today_df[agreement_col]).sum()) if agreement_col and not today_df.empty else 0
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Bookings", total_bookings)
-    c2.metric("Stamp Duty Received", stamp_received)
-    c3.metric("Agreement Done", agreement_done)
-
-    if "booking_df" in globals() and "hold_df" in globals():
-        try:
-            inventory_df = _build_inventory_status_df(booking_df, hold_df)
-            inv = inventory_df[inventory_df["Base Category"].eq("OUR")].copy()
-            inv_rows = []
-            for wing, wing_df in inv.groupby("Wing"):
-                total_units = int(len(wing_df))
-                sold_units = int(wing_df["Internal Status"].isin(["BOOKED_PENDING", "STAMP_DUTY_RECEIVED", "AGREEMENT_LINEUP", "AGREEMENT_DONE"]).sum())
-                balance_units = max(total_units - sold_units, 0)
-                inv_rows.append({
-                    "Wing": wing,
-                    "Our Inventory": total_units,
-                    "Sold": sold_units,
-                    "Balance": balance_units,
-                })
-            st.markdown("### Wing-wise Inventory")
-            st.dataframe(pd.DataFrame(inv_rows), use_container_width=True, hide_index=True)
-        except Exception as exc:
-            st.warning(f"Could not build inventory summary: {exc}")
-
-    st.markdown("### Bookings Done Today")
-    if today_df.empty:
-        st.info("No bookings done on selected date.")
+    if date_col:
+        df["_date"] = _dpr_date_series(df[date_col])
+        today_df = df[df["_date"].dt.date == target_date].copy()
+        till_df = _dpr_bookings_until(df, date_col, target_date)
     else:
-        show_cols = [c for c in [exec_col, wing_col, flat_col, type_col] if c]
-        show = today_df[show_cols].copy()
-        show.columns = ["Sales Executive" if c == exec_col else "Wing" if c == wing_col else "Flat Number" if c == flat_col else "Type" for c in show.columns]
-        st.dataframe(show, use_container_width=True, hide_index=True)
+        today_df = pd.DataFrame(columns=df.columns)
+        till_df = df.copy()
 
-    return today_df
+    total_bookings_till_date = int(len(till_df))
+    stamp_till_date = int(_dpr_status_done(till_df[stamp_col]).sum()) if stamp_col else 0
+    agreement_till_date = int(_dpr_status_done(till_df[agreement_col]).sum()) if agreement_col else 0
+
+    today_bookings = int(len(today_df))
+    today_stamp = int(_dpr_status_done(today_df[stamp_col]).sum()) if stamp_col and not today_df.empty else 0
+    today_agreement = int(_dpr_status_done(today_df[agreement_col]).sum()) if agreement_col and not today_df.empty else 0
+
+    show_cols = [c for c in [exec_col, wing_col, flat_col, type_col] if c]
+    if not today_df.empty and show_cols:
+        bookings_today_df = today_df[show_cols].copy()
+        bookings_today_df.columns = [
+            "Sales Executive" if c == exec_col else
+            "Wing" if c == wing_col else
+            "Flat Number" if c == flat_col else
+            "Type"
+            for c in bookings_today_df.columns
+        ]
+    else:
+        bookings_today_df = pd.DataFrame(columns=["Sales Executive", "Wing", "Flat Number", "Type"])
+
+    return {
+        "warning": None if date_col else "Booking date column not found. Today-only sales count cannot be calculated.",
+        "overall_metrics": [
+            _dpr_metric("Total Bookings Till Date", f"{total_bookings_till_date:,}", "Overall sales booked", "blue"),
+            _dpr_metric("Stamp Duty Received Till Date", f"{stamp_till_date:,}", "Overall received count", "green"),
+            _dpr_metric("Agreement Done Till Date", f"{agreement_till_date:,}", "Overall agreement count", "amber"),
+        ],
+        "today_metrics": [
+            _dpr_metric("Bookings Today", f"{today_bookings:,}", "Selected report date", "blue"),
+            _dpr_metric("Stamp Duty Today", f"{today_stamp:,}", "Selected report date", "green"),
+            _dpr_metric("Agreement Done Today", f"{today_agreement:,}", "Selected report date", "amber"),
+        ],
+        "inventory_df": _dpr_build_inventory_table(),
+        "bookings_today_df": bookings_today_df,
+    }
 
 
-def _dpr_cashflow_section(bookings_df: pd.DataFrame):
-    st.markdown("## Cashflow")
-
+def _dpr_build_cashflow_data(bookings_df: pd.DataFrame):
     if bookings_df is None or bookings_df.empty:
-        st.warning("No booking data available.")
-        return
+        return {
+            "warning": "No booking data available.",
+            "metrics": [],
+            "wing_df": pd.DataFrame(),
+        }
 
     df = bookings_df.copy()
     wing_col = _dpr_col(df, "wing", "Wing")
@@ -146,8 +400,11 @@ def _dpr_cashflow_section(bookings_df: pd.DataFrame):
     carpet_col = _dpr_col(df, "carpet_area", "Carpet Area")
 
     if not agreement_col:
-        st.warning("Agreement Cost column not found.")
-        return
+        return {
+            "warning": "Agreement Cost column not found.",
+            "metrics": [],
+            "wing_df": pd.DataFrame(),
+        }
 
     df["_agreement"] = df[agreement_col].apply(_dpr_to_num)
     df["_received"] = df[received_col].apply(_dpr_to_num) if received_col else 0.0
@@ -159,12 +416,7 @@ def _dpr_cashflow_section(bookings_df: pd.DataFrame):
     total_due = float(df["_due"].sum())
     carpet_sold = float(df["_carpet"].sum())
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Amount", _dpr_fmt_money(total_amount))
-    c2.metric("Received", _dpr_fmt_money(total_received))
-    c3.metric("Due", _dpr_fmt_money(total_due))
-    c4.metric("Carpet Area Sold", f"{_dpr_fmt_num(carpet_sold)} sqft")
-
+    wing_summary = pd.DataFrame()
     if wing_col:
         wing_summary = (
             df.groupby(wing_col, as_index=False)
@@ -178,11 +430,22 @@ def _dpr_cashflow_section(bookings_df: pd.DataFrame):
             )
             .rename(columns={wing_col: "Wing"})
         )
+
         for col in ["Total Amount", "Received", "Due"]:
             wing_summary[col] = wing_summary[col].apply(_dpr_fmt_money)
+
         wing_summary["Carpet Area Sold"] = wing_summary["Carpet Area Sold"].apply(lambda x: f"{_dpr_fmt_num(x)} sqft")
-        st.markdown("### Wing-wise Cashflow")
-        st.dataframe(wing_summary, use_container_width=True, hide_index=True)
+
+    return {
+        "warning": None,
+        "metrics": [
+            _dpr_metric("Total Amount", _dpr_fmt_money(total_amount), "Agreement cost total", "blue"),
+            _dpr_metric("Received", _dpr_fmt_money(total_received), "Amount received", "green"),
+            _dpr_metric("Due", _dpr_fmt_money(total_due), "Pending amount", "amber"),
+            _dpr_metric("Carpet Area Sold", f"{_dpr_fmt_num(carpet_sold)} sqft", "Total sold carpet", "slate"),
+        ],
+        "wing_df": wing_summary,
+    }
 
 
 def _dpr_construction_work_done(floor_df, flat_df, floor_col_map, flat_col_map, target_date: _dt.date):
@@ -197,6 +460,7 @@ def _dpr_construction_work_done(floor_df, flat_df, floor_col_map, flat_col_map, 
                     d = _parse_date(floor_row.get(col))
                     if pd.notna(d) and d.date() == target_date:
                         completed.append(cp.label)
+
             if completed:
                 rows.append({
                     "Wing": _wing_value(floor_row),
@@ -212,9 +476,11 @@ def _dpr_construction_work_done(floor_df, flat_df, floor_col_map, flat_col_map, 
                 col = flat_col_map.get(cp)
                 if not col:
                     continue
+
                 d = _parse_date(flat_row.get(col))
                 if pd.notna(d) and d.date() == target_date:
                     done_by_heading.setdefault(cp.heading, []).append(f"{_flat_label(flat_row)}: {cp.label}")
+
             for heading, items in done_by_heading.items():
                 rows.append({
                     "Wing": _wing_value(flat_row),
@@ -226,23 +492,27 @@ def _dpr_construction_work_done(floor_df, flat_df, floor_col_map, flat_col_map, 
     return pd.DataFrame(rows)
 
 
-def _dpr_construction_section(supabase_client, target_date: _dt.date):
-    st.markdown("## Construction")
-
+def _dpr_build_construction_data(supabase_client, target_date: _dt.date):
     labour_df = _dpr_fetch_table(supabase_client, LABOUR_TABLE)
     concrete_df = _dpr_fetch_table(supabase_client, CONCRETE_TABLE)
 
-    if not labour_df.empty:
+    if not labour_df.empty and "report_date" in labour_df.columns:
         labour_df["report_date"] = _dpr_date_series(labour_df["report_date"])
         labour_today = labour_df[labour_df["report_date"].dt.date == target_date].copy()
     else:
         labour_today = pd.DataFrame()
 
-    if not labour_today.empty:
-        staff_cols = ["project_manager", "senior_engineer", "junior_engineer", "supervisor"]
-        labour_cols = ["carpenter", "fitter", "mason", "unskilled", "others"]
+    staff = pd.DataFrame()
+    labour = pd.DataFrame()
+    staff_cols = ["project_manager", "senior_engineer", "junior_engineer", "supervisor"]
+    labour_cols = ["carpenter", "fitter", "mason", "unskilled", "others"]
 
-        st.markdown("### Contractor-wise Staff Count")
+    if not labour_today.empty:
+        for col in staff_cols + labour_cols:
+            if col not in labour_today.columns:
+                labour_today[col] = 0
+            labour_today[col] = pd.to_numeric(labour_today[col], errors="coerce").fillna(0)
+
         staff = (
             labour_today.groupby("contractor_name", as_index=False)[staff_cols]
             .sum()
@@ -254,9 +524,7 @@ def _dpr_construction_section(supabase_client, target_date: _dt.date):
                 "supervisor": "Supervisor",
             })
         )
-        st.dataframe(staff, use_container_width=True, hide_index=True)
 
-        st.markdown("### Wing-wise Contractor-wise Labour Count")
         labour = (
             labour_today.groupby(["wing", "contractor_name"], as_index=False)[labour_cols]
             .sum()
@@ -270,20 +538,18 @@ def _dpr_construction_section(supabase_client, target_date: _dt.date):
                 "others": "Others",
             })
         )
-        st.dataframe(labour, use_container_width=True, hide_index=True)
-    else:
-        st.info("No labour/staff entries found for selected date.")
 
-    if not concrete_df.empty:
+    if not concrete_df.empty and "report_date" in concrete_df.columns:
         concrete_df["report_date"] = _dpr_date_series(concrete_df["report_date"])
         concrete_today = concrete_df[concrete_df["report_date"].dt.date == target_date].copy()
     else:
         concrete_today = pd.DataFrame()
 
-    st.markdown("### Concrete Consumption")
-    if concrete_today.empty:
-        st.info("No concrete consumption entries found for selected date.")
-    else:
+    concrete_summary = pd.DataFrame()
+    if not concrete_today.empty:
+        if "concrete_quantity_m3" not in concrete_today.columns:
+            concrete_today["concrete_quantity_m3"] = 0
+        concrete_today["concrete_quantity_m3"] = pd.to_numeric(concrete_today["concrete_quantity_m3"], errors="coerce").fillna(0)
         concrete_summary = (
             concrete_today.groupby(["wing", "work"], as_index=False)["concrete_quantity_m3"]
             .sum()
@@ -293,22 +559,339 @@ def _dpr_construction_section(supabase_client, target_date: _dt.date):
                 "concrete_quantity_m3": "Concrete Quantity (M3)",
             })
         )
-        st.dataframe(concrete_summary, use_container_width=True, hide_index=True)
 
     floor_df, flat_df = _load_data(supabase_client)
     floor_col_map = _column_lookup(floor_df, RCC_CHECKPOINTS)
     flat_col_map = _column_lookup(flat_df, FLAT_CHECKPOINTS)
     work_done_df = _dpr_construction_work_done(floor_df, flat_df, floor_col_map, flat_col_map, target_date)
 
-    st.markdown("### Work Done Today")
-    if work_done_df.empty:
-        st.info("No construction checkpoints were marked done on selected date.")
-    else:
-        work_done_df = work_done_df.sort_values(["Wing", "Floor / Level", "Main Work"])
-        st.dataframe(work_done_df, use_container_width=True, hide_index=True)
+    if not work_done_df.empty:
+        work_done_df = work_done_df.sort_values(["Wing", "Floor / Level", "Main Work"]).reset_index(drop=True)
+
+    total_staff = int(staff[[c for c in ["Project Manager", "Senior Engineer", "Junior Engineer", "Supervisor"] if c in staff.columns]].sum().sum()) if not staff.empty else 0
+    total_labour = int(labour[[c for c in ["Carpenter", "Fitter", "Mason", "Unskilled", "Others"] if c in labour.columns]].sum().sum()) if not labour.empty else 0
+    concrete_total = float(concrete_summary["Concrete Quantity (M3)"].sum()) if not concrete_summary.empty else 0.0
+
+    active_wings = set()
+    for df_part, col in [(labour, "Wing"), (concrete_summary, "Wing"), (work_done_df, "Wing")]:
+        if df_part is not None and not df_part.empty and col in df_part.columns:
+            active_wings.update(df_part[col].dropna().astype(str).str.strip().tolist())
+
+    return {
+        "metrics": [
+            _dpr_metric("Total Site Staff", f"{total_staff:,}", "Contractor staff today", "blue"),
+            _dpr_metric("Total Labour", f"{total_labour:,}", "Wing-wise labour today", "green"),
+            _dpr_metric("Concrete Consumed", f"{_dpr_fmt_num(concrete_total)} M3", "Today consumption", "amber"),
+            _dpr_metric("Work Updates", f"{len(work_done_df):,}", "Checkpoints marked today", "slate"),
+            _dpr_metric("Active Wings", f"{len([w for w in active_wings if w]):,}", "Wings with activity", "blue"),
+        ],
+        "staff_df": staff,
+        "labour_df": labour,
+        "concrete_df": concrete_summary,
+        "work_done_df": work_done_df,
+    }
+
+
+def _dpr_render_sales_section(sales_data):
+    _dpr_section_title("Sales Summary")
+
+    if sales_data.get("warning"):
+        st.warning(sales_data["warning"])
+
+    st.markdown('<div class="dpr-table-title">Overall Sales Till Date</div>', unsafe_allow_html=True)
+    _dpr_render_kpis(sales_data.get("overall_metrics", []), columns=3)
+
+    st.markdown('<div class="dpr-table-title">Today Sales Movement</div>', unsafe_allow_html=True)
+    _dpr_render_kpis(sales_data.get("today_metrics", []), columns=3)
+
+    _dpr_display_table(
+        "Wing-wise Inventory",
+        sales_data.get("inventory_df", pd.DataFrame()),
+        "Inventory summary is not available.",
+    )
+
+    _dpr_display_table(
+        "Bookings Done Today",
+        sales_data.get("bookings_today_df", pd.DataFrame()),
+        "No bookings done on selected date.",
+    )
+
+
+def _dpr_render_cashflow_section(cashflow_data):
+    _dpr_section_title("Cashflow Summary")
+
+    if cashflow_data.get("warning"):
+        st.warning(cashflow_data["warning"])
+
+    _dpr_render_kpis(cashflow_data.get("metrics", []), columns=4)
+
+    _dpr_display_table(
+        "Wing-wise Cashflow",
+        cashflow_data.get("wing_df", pd.DataFrame()),
+        "Wing-wise cashflow data is not available.",
+    )
+
+
+def _dpr_render_construction_section(construction_data):
+    _dpr_section_title("Construction Summary")
+
+    _dpr_render_kpis(construction_data.get("metrics", []), columns=5)
+
+    _dpr_display_table(
+        "Contractor-wise Staff Count",
+        construction_data.get("staff_df", pd.DataFrame()),
+        "No staff entries found for selected date.",
+    )
+
+    _dpr_display_table(
+        "Wing-wise Contractor-wise Labour Count",
+        construction_data.get("labour_df", pd.DataFrame()),
+        "No labour entries found for selected date.",
+    )
+
+    _dpr_display_table(
+        "Concrete Consumption",
+        construction_data.get("concrete_df", pd.DataFrame()),
+        "No concrete consumption entries found for selected date.",
+    )
+
+    _dpr_display_table(
+        "Work Done Today",
+        construction_data.get("work_done_df", pd.DataFrame()),
+        "No construction checkpoints were marked done on selected date.",
+        height=360,
+    )
+
+
+def _dpr_pdf_safe(value):
+    s = str(value if value is not None else "")
+    replacements = {
+        "₹": "Rs ",
+        "—": "-",
+        "–": "-",
+        "•": "-",
+        "\n": " ",
+        "\r": " ",
+    }
+    for old, new in replacements.items():
+        s = s.replace(old, new)
+    return s.encode("latin-1", "ignore").decode("latin-1")
+
+
+def _dpr_pdf_section(pdf: FPDF, title: str):
+    if pdf.get_y() > 260:
+        pdf.add_page()
+
+    pdf.ln(4)
+    pdf.set_fill_color(235, 244, 255)
+    pdf.set_draw_color(191, 219, 254)
+    pdf.set_text_color(15, 23, 42)
+    pdf.set_font("Arial", "B", 13)
+    pdf.cell(0, 9, _dpr_pdf_safe(title), border=1, ln=True, align="C", fill=True)
+    pdf.ln(2)
+
+
+def _dpr_pdf_kpis(pdf: FPDF, title: str, items, per_row=3):
+    if not items:
+        return
+
+    _dpr_pdf_section(pdf, title)
+
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+    gap = 4
+    card_w = (page_w - gap * (per_row - 1)) / per_row
+    card_h = 21
+
+    for idx, item in enumerate(items):
+        if idx % per_row == 0:
+            if idx > 0:
+                pdf.ln(card_h + 4)
+            if pdf.get_y() + card_h > 270:
+                pdf.add_page()
+
+        x = pdf.l_margin + (idx % per_row) * (card_w + gap)
+        y = pdf.get_y()
+
+        pdf.set_xy(x, y)
+        pdf.set_fill_color(248, 250, 252)
+        pdf.set_draw_color(219, 228, 238)
+        pdf.rect(x, y, card_w, card_h, style="DF")
+
+        pdf.set_xy(x + 3, y + 3)
+        pdf.set_text_color(100, 116, 139)
+        pdf.set_font("Arial", "B", 7)
+        pdf.cell(card_w - 6, 4, _dpr_pdf_safe(item.get("label", "")).upper()[:42], ln=True)
+
+        pdf.set_xy(x + 3, y + 8)
+        pdf.set_text_color(15, 23, 42)
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(card_w - 6, 7, _dpr_pdf_safe(item.get("value", ""))[:32], ln=True)
+
+        pdf.set_xy(x + 3, y + 16)
+        pdf.set_text_color(100, 116, 139)
+        pdf.set_font("Arial", "", 7)
+        pdf.cell(card_w - 6, 4, _dpr_pdf_safe(item.get("note", ""))[:42], ln=True)
+
+    pdf.set_xy(pdf.l_margin, pdf.get_y() + card_h + 4)
+
+
+def _dpr_pdf_wrap(pdf: FPDF, text, width, size=7):
+    pdf.set_font("Arial", "", size)
+    cleaned = _dpr_pdf_safe(text)
+    words = cleaned.split()
+    if not words:
+        return ["-"]
+
+    lines = []
+    cur = ""
+    for word in words:
+        probe = f"{cur} {word}".strip()
+        if pdf.get_string_width(probe) <= width:
+            cur = probe
+        else:
+            if cur:
+                lines.append(cur)
+            cur = word
+
+    if cur:
+        lines.append(cur)
+
+    return lines[:4] or ["-"]
+
+
+def _dpr_pdf_table(pdf: FPDF, title: str, df: pd.DataFrame, max_rows=35):
+    _dpr_pdf_section(pdf, title)
+
+    if df is None or df.empty:
+        pdf.set_font("Arial", "", 9)
+        pdf.set_text_color(71, 85, 105)
+        pdf.cell(0, 7, "No data available.", ln=True)
+        return
+
+    out = df.copy().head(max_rows)
+    cols = list(out.columns)
+    max_cols = 7
+    if len(cols) > max_cols:
+        cols = cols[:max_cols]
+        out = out[cols].copy()
+
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+    widths = [page_w / len(cols)] * len(cols)
+
+    if "Work Done" in cols:
+        narrow = page_w * 0.16
+        widths = []
+        for col in cols:
+            widths.append(page_w * 0.42 if col == "Work Done" else narrow)
+        scale = page_w / sum(widths)
+        widths = [w * scale for w in widths]
+
+    if pdf.get_y() + 8 > 270:
+        pdf.add_page()
+
+    pdf.set_font("Arial", "B", 7)
+    pdf.set_fill_color(15, 23, 42)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_draw_color(203, 213, 225)
+
+    for col, width in zip(cols, widths):
+        pdf.cell(width, 7, _dpr_pdf_safe(col)[:24], border=1, align="C", fill=True)
+    pdf.ln()
+
+    pdf.set_text_color(15, 23, 42)
+    pdf.set_font("Arial", "", 7)
+
+    for row_idx, (_, row) in enumerate(out.iterrows()):
+        wrapped = [_dpr_pdf_wrap(pdf, row.get(col, ""), width - 3, size=7) for col, width in zip(cols, widths)]
+        row_h = max(7, max(len(lines) for lines in wrapped) * 4 + 3)
+
+        if pdf.get_y() + row_h > 275:
+            pdf.add_page()
+            pdf.set_font("Arial", "B", 7)
+            pdf.set_fill_color(15, 23, 42)
+            pdf.set_text_color(255, 255, 255)
+            for col, width in zip(cols, widths):
+                pdf.cell(width, 7, _dpr_pdf_safe(col)[:24], border=1, align="C", fill=True)
+            pdf.ln()
+            pdf.set_font("Arial", "", 7)
+            pdf.set_text_color(15, 23, 42)
+
+        x0, y0 = pdf.get_x(), pdf.get_y()
+        fill = row_idx % 2 == 0
+        pdf.set_fill_color(248, 250, 252 if fill else 255)
+
+        x = x0
+        for width in widths:
+            pdf.rect(x, y0, width, row_h, style="DF" if fill else "D")
+            x += width
+
+        x = x0
+        for lines, width in zip(wrapped, widths):
+            pdf.set_xy(x + 1.5, y0 + 1.5)
+            for line_no, line in enumerate(lines):
+                pdf.set_xy(x + 1.5, y0 + 1.5 + line_no * 4)
+                pdf.cell(width - 3, 4, line[:80], border=0)
+            x += width
+
+        pdf.set_xy(pdf.l_margin, y0 + row_h)
+
+    if len(df) > max_rows:
+        pdf.set_font("Arial", "I", 7)
+        pdf.set_text_color(100, 116, 139)
+        pdf.cell(0, 6, f"Showing first {max_rows} rows of {len(df)} total rows.", ln=True)
+
+
+class _DailyProgressPDF(FPDF):
+    def footer(self):
+        self.set_y(-11)
+        self.set_font("Arial", "I", 7)
+        self.set_text_color(100, 116, 139)
+        self.cell(0, 6, f"Page {self.page_no()}", align="C")
+
+
+def _dpr_pdf_bytes(report_date: _dt.date, report_parts: dict):
+    pdf = _DailyProgressPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_margins(10, 10, 10)
+    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.add_page()
+
+    pdf.set_fill_color(30, 64, 175)
+    pdf.rect(10, 10, 190, 26, style="F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Arial", "B", 17)
+    pdf.set_xy(10, 15)
+    pdf.cell(190, 8, "Daily Progress Report", ln=True, align="C")
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(190, 7, f"Pratham Vihar | Report Date: {_dpr_date_label(report_date)}", ln=True, align="C")
+    pdf.ln(6)
+
+    sales = report_parts.get("sales", {})
+    cashflow = report_parts.get("cashflow", {})
+    construction = report_parts.get("construction", {})
+
+    _dpr_pdf_kpis(pdf, "Sales - Overall Till Date", sales.get("overall_metrics", []), per_row=3)
+    _dpr_pdf_kpis(pdf, "Sales - Today", sales.get("today_metrics", []), per_row=3)
+    _dpr_pdf_table(pdf, "Wing-wise Inventory", sales.get("inventory_df", pd.DataFrame()))
+    _dpr_pdf_table(pdf, "Bookings Done Today", sales.get("bookings_today_df", pd.DataFrame()))
+
+    _dpr_pdf_kpis(pdf, "Cashflow", cashflow.get("metrics", []), per_row=2)
+    _dpr_pdf_table(pdf, "Wing-wise Cashflow", cashflow.get("wing_df", pd.DataFrame()))
+
+    _dpr_pdf_kpis(pdf, "Construction", construction.get("metrics", []), per_row=3)
+    _dpr_pdf_table(pdf, "Contractor-wise Staff Count", construction.get("staff_df", pd.DataFrame()))
+    _dpr_pdf_table(pdf, "Wing-wise Contractor-wise Labour Count", construction.get("labour_df", pd.DataFrame()))
+    _dpr_pdf_table(pdf, "Concrete Consumption", construction.get("concrete_df", pd.DataFrame()))
+    _dpr_pdf_table(pdf, "Work Done Today", construction.get("work_done_df", pd.DataFrame()), max_rows=55)
+
+    output = pdf.output(dest="S")
+    if isinstance(output, str):
+        return output.encode("latin1", "ignore")
+
+    return bytes(output)
 
 
 st.header("Daily Progress Report")
+_dpr_page_css()
 
 supabase_client = globals().get("supabase", None) or globals().get("supabase_client", None)
 
@@ -322,8 +905,34 @@ else:
         key="daily_progress_report_date",
     )
 
-    bookings_source = booking_df.copy() if "booking_df" in globals() and isinstance(booking_df, pd.DataFrame) else pd.DataFrame()
+    bookings_source = (
+        booking_df.copy()
+        if "booking_df" in globals() and isinstance(booking_df, pd.DataFrame)
+        else pd.DataFrame()
+    )
 
-    _dpr_sales_section(bookings_source, report_date)
-    _dpr_cashflow_section(bookings_source)
-    _dpr_construction_section(supabase_client, report_date)
+    _dpr_hero(report_date)
+
+    with st.spinner("Preparing director report..."):
+        report_parts = {
+            "sales": _dpr_build_sales_data(bookings_source, report_date),
+            "cashflow": _dpr_build_cashflow_data(bookings_source),
+            "construction": _dpr_build_construction_data(supabase_client, report_date),
+        }
+        pdf_bytes = _dpr_pdf_bytes(report_date, report_parts)
+
+    st.markdown(
+        '<div class="dpr-download-box">Director PDF is ready. Use this same PDF for email or WhatsApp sharing.</div>',
+        unsafe_allow_html=True,
+    )
+    st.download_button(
+        "Download Daily Progress Report PDF",
+        data=pdf_bytes,
+        file_name=f"daily_progress_report_{report_date.isoformat()}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+    )
+
+    _dpr_render_sales_section(report_parts["sales"])
+    _dpr_render_cashflow_section(report_parts["cashflow"])
+    _dpr_render_construction_section(report_parts["construction"])
