@@ -3,6 +3,59 @@
 BOOKINGS_TABLE = "bookings"
 
 
+def _tab5_norm_col(name: str) -> str:
+    return "".join(ch for ch in str(name or "").lower() if ch.isalnum())
+
+
+def _normalize_tracker_booking_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Agreement Done Tracker works with Supabase snake_case names.
+    Shared app cleanup can rename the cached dataframe to display names,
+    so normalize both formats back to one internal shape here.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out = df.copy()
+    norm_to_col = {_tab5_norm_col(c): c for c in out.columns}
+
+    aliases = {
+        "id": ["id"],
+        "month": ["month", "Month"],
+        "customer_name": ["customer_name", "Customer Name"],
+        "sales_executive": ["sales_executive", "Sales Executive"],
+        "wing": ["wing", "Wing"],
+        "flat_number": ["flat_number", "Flat Number"],
+        "agreement_done": ["agreement_done", "Agreement Done"],
+        "stamp_duty": ["stamp_duty", "Stamp Duty"],
+        "incentive": ["incentive", "Incentive"],
+        "rcc": ["rcc", "RCC"],
+        "possession_handover": ["possession_handover", "POSSESSION HANDOVER", "Possession Handover"],
+        "lead_type": ["lead_type", "Lead Type"],
+        "referral_given": ["referral_given", "Referral Given"],
+        "insider_banker": ["insider_banker", "Insider Banker"],
+        "outsider_banker": ["outsider_banker", "Outsider Banker"],
+        "offer_1": ["offer_1", "Offer 1"],
+        "offer_2": ["offer_2", "Offer 2"],
+        "offer_1_rewarded": ["offer_1_rewarded", "Offer 1 Rewarded"],
+        "offer_2_rewarded": ["offer_2_rewarded", "Offer 2 Rewarded"],
+    }
+
+    for target, possible_names in aliases.items():
+        if target in out.columns:
+            continue
+
+        source = None
+        for name in possible_names:
+            source = norm_to_col.get(_tab5_norm_col(name))
+            if source:
+                break
+
+        out[target] = out[source] if source else ""
+
+    return out
+
+
 def get_bookings_df():
     """
     Uses already-loaded Supabase data from load_all_data().
@@ -11,7 +64,7 @@ def get_bookings_df():
     global booking_df
 
     if "booking_df" in globals() and booking_df is not None and not booking_df.empty:
-        return booking_df.copy()
+        return _normalize_tracker_booking_df(booking_df)
 
     response = (
         supabase
@@ -21,7 +74,7 @@ def get_bookings_df():
         .execute()
     )
 
-    return pd.DataFrame(response.data or [])
+    return _normalize_tracker_booking_df(pd.DataFrame(response.data or []))
 
 
 def update_booking_status(booking_id, updates):
