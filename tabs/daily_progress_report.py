@@ -1,6 +1,12 @@
 import base64
 import datetime as _dt
 import re
+import smtplib
+import ssl
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formatdate
 
 import pandas as pd
 import streamlit as st
@@ -525,19 +531,22 @@ def _dpr_build_construction_data(supabase_client, target_date: _dt.date):
             })
         )
 
-        labour = (
-            labour_today.groupby(["wing", "contractor_name"], as_index=False)[labour_cols]
-            .sum()
-            .rename(columns={
-                "wing": "Wing",
-                "contractor_name": "Contractor",
-                "carpenter": "Carpenter",
-                "fitter": "Fitter",
-                "mason": "Mason",
-                "unskilled": "Unskilled",
-                "others": "Others",
-            })
-        )
+        labour_today_nonzero = labour_today[labour_today[labour_cols].sum(axis=1) > 0].copy()
+
+        if not labour_today_nonzero.empty:
+            labour = (
+                labour_today_nonzero.groupby(["wing", "contractor_name"], as_index=False)[labour_cols]
+                .sum()
+                .rename(columns={
+                    "wing": "Wing",
+                    "contractor_name": "Contractor",
+                    "carpenter": "Carpenter",
+                    "fitter": "Fitter",
+                    "mason": "Mason",
+                    "unskilled": "Unskilled",
+                    "others": "Others",
+                })
+            )
 
     if not concrete_df.empty and "report_date" in concrete_df.columns:
         concrete_df["report_date"] = _dpr_date_series(concrete_df["report_date"])
@@ -691,26 +700,32 @@ def _dpr_pdf_section(pdf: FPDF, title: str):
     pdf.ln(2)
 
 
-def _dpr_pdf_kpis(pdf: FPDF, title: str, items, per_row=3):
+def _dpr_pdf_kpis(pdf: FPDF, title: str, items, per_row=None):
     if not items:
         return
 
     _dpr_pdf_section(pdf, title)
 
     page_w = pdf.w - pdf.l_margin - pdf.r_margin
-    gap = 4
+    if per_row is None:
+        per_row = min(len(items), 5)
+    per_row = max(1, min(int(per_row), len(items), 5))
+
+    gap = 3
     card_w = (page_w - gap * (per_row - 1)) / per_row
     card_h = 21
+    row_y = pdf.get_y()
 
     for idx, item in enumerate(items):
         if idx % per_row == 0:
             if idx > 0:
-                pdf.ln(card_h + 4)
-            if pdf.get_y() + card_h > 270:
+                row_y += card_h + 4
+            if row_y + card_h > 270:
                 pdf.add_page()
+                row_y = pdf.get_y()
 
         x = pdf.l_margin + (idx % per_row) * (card_w + gap)
-        y = pdf.get_y()
+        y = row_y
 
         pdf.set_xy(x, y)
         pdf.set_fill_color(248, 250, 252)
@@ -732,7 +747,7 @@ def _dpr_pdf_kpis(pdf: FPDF, title: str, items, per_row=3):
         pdf.set_font("Arial", "", 7)
         pdf.cell(card_w - 6, 4, _dpr_pdf_safe(item.get("note", ""))[:42], ln=True)
 
-    pdf.set_xy(pdf.l_margin, pdf.get_y() + card_h + 4)
+    pdf.set_xy(pdf.l_margin, row_y + card_h + 4)
 
 
 def _dpr_pdf_wrap(pdf: FPDF, text, width, size=7):
@@ -869,15 +884,15 @@ def _dpr_pdf_bytes(report_date: _dt.date, report_parts: dict):
     cashflow = report_parts.get("cashflow", {})
     construction = report_parts.get("construction", {})
 
-    _dpr_pdf_kpis(pdf, "Sales - Overall Till Date", sales.get("overall_metrics", []), per_row=3)
-    _dpr_pdf_kpis(pdf, "Sales - Today", sales.get("today_metrics", []), per_row=3)
+    _dpr_pdf_kpis(pdf, "Sales - Overall Till Date", sales.get("overall_metrics", []))
+    _dpr_pdf_kpis(pdf, "Sales - Today", sales.get("today_metrics", []))
     _dpr_pdf_table(pdf, "Wing-wise Inventory", sales.get("inventory_df", pd.DataFrame()))
     _dpr_pdf_table(pdf, "Bookings Done Today", sales.get("bookings_today_df", pd.DataFrame()))
 
-    _dpr_pdf_kpis(pdf, "Cashflow", cashflow.get("metrics", []), per_row=2)
+    _dpr_pdf_kpis(pdf, "Cashflow", cashflow.get("metrics", []))
     _dpr_pdf_table(pdf, "Wing-wise Cashflow", cashflow.get("wing_df", pd.DataFrame()))
 
-    _dpr_pdf_kpis(pdf, "Construction", construction.get("metrics", []), per_row=3)
+    _dpr_pdf_kpis(pdf, "Construction", construction.get("metrics", []))
     _dpr_pdf_table(pdf, "Contractor-wise Staff Count", construction.get("staff_df", pd.DataFrame()))
     _dpr_pdf_table(pdf, "Wing-wise Contractor-wise Labour Count", construction.get("labour_df", pd.DataFrame()))
     _dpr_pdf_table(pdf, "Concrete Consumption", construction.get("concrete_df", pd.DataFrame()))
@@ -888,6 +903,69 @@ def _dpr_pdf_bytes(report_date: _dt.date, report_parts: dict):
         return output.encode("latin1", "ignore")
 
     return bytes(output)
+
+
+def _dpr_clean_email_list(value):
+    if isinstance(value, str):
+        return [x.strip() for x in value.split(",") if x.strip()]
+
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+
+    return []
+
+
+def _dpr_send_daily_report_email(pdf_bytes: bytes, report_date: _dt.date):
+    try:
+        email_cfg = dict(st.secrets.get("email", {}))
+    except Exception:
+        email_cfg = {}
+
+    smtp_host = email_cfg.get("smtp_host", "smtp.gmail.com")
+    smtp_port = int(email_cfg.get("smtp_port", 465))
+    sender_email = email_cfg.get("sender_email", "")
+    sender_password = email_cfg.get("sender_password", "")
+    receiver_email = email_cfg.get("receiver_email", "")
+    subject_prefix = email_cfg.get("daily_subject_prefix", "Pratham Vihar Daily Progress Report")
+
+    if not sender_email or not sender_password or not receiver_email:
+        return False, "Email secrets are missing. Add sender_email, sender_password, and receiver_email in Streamlit secrets."
+
+    recipients = _dpr_clean_email_list(receiver_email)
+    if not recipients:
+        return False, "Receiver email is empty."
+
+    report_label = _dpr_date_label(report_date)
+    filename = f"daily_progress_report_{report_date.isoformat()}.pdf"
+
+    msg = MIMEMultipart()
+    msg["Subject"] = f"{subject_prefix} - {report_label}"
+    msg["From"] = sender_email
+    msg["To"] = ", ".join(recipients)
+    msg["Date"] = formatdate(localtime=True)
+
+    html_body = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; color:#111827;">
+        <h2 style="margin-bottom:4px;">Pratham Vihar Daily Progress Report</h2>
+        <p style="margin-top:0;color:#475569;">Report Date: {report_label}</p>
+        <p>Please find the attached director PDF report.</p>
+      </body>
+    </html>
+    """
+
+    msg.attach(MIMEText(html_body, "html"))
+
+    attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
+    attachment.add_header("Content-Disposition", "attachment", filename=filename)
+    msg.attach(attachment)
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context) as server:
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, recipients, msg.as_string())
+
+    return True, f"Daily report email sent to {', '.join(recipients)}."
 
 
 st.header("Daily Progress Report")
@@ -922,16 +1000,28 @@ else:
         pdf_bytes = _dpr_pdf_bytes(report_date, report_parts)
 
     st.markdown(
-        '<div class="dpr-download-box">Director PDF is ready. Use this same PDF for email or WhatsApp sharing.</div>',
+        '<div class="dpr-download-box">Director PDF is ready. This is the same PDF that will be used for email sharing.</div>',
         unsafe_allow_html=True,
     )
-    st.download_button(
-        "Download Daily Progress Report PDF",
-        data=pdf_bytes,
-        file_name=f"daily_progress_report_{report_date.isoformat()}.pdf",
-        mime="application/pdf",
-        use_container_width=True,
-    )
+
+    pdf_col, email_col = st.columns(2)
+    with pdf_col:
+        st.download_button(
+            "Download Daily Progress Report PDF",
+            data=pdf_bytes,
+            file_name=f"daily_progress_report_{report_date.isoformat()}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
+    with email_col:
+        if st.button("Send Daily Report Email Now", type="primary", use_container_width=True):
+            with st.spinner("Sending daily progress report email..."):
+                ok, msg = _dpr_send_daily_report_email(pdf_bytes, report_date)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
     _dpr_render_sales_section(report_parts["sales"])
     _dpr_render_cashflow_section(report_parts["cashflow"])
