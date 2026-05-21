@@ -13,14 +13,18 @@ else:
     flat_col_map = _column_lookup(flat_df, FLAT_CHECKPOINTS)
     wings = _wing_options(floor_df, flat_df)
 
-    floor_tab, flat_tab, consumption_tab = st.tabs([
+    floor_tab, rcc_delay_tab, flat_tab, consumption_tab = st.tabs([
         "Floor-wise Progress",
+        "RCC Delay Tracking",
         "Flat-wise Progress",
         "Consumption",
     ])
 
     with floor_tab:
         _render_floorwise(floor_df, flat_df, floor_col_map, flat_col_map, wings)
+
+    with rcc_delay_tab:
+        _render_rcc_delay_tracking(supabase_client, floor_df, floor_col_map, wings)
 
     with flat_tab:
         _render_flatwise(flat_df, flat_col_map, wings)
