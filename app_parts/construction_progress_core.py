@@ -17,6 +17,7 @@ import streamlit.components.v1 as components
 
 FLOOR_TABLE = "construction_floor_progress"
 FLAT_TABLE = "construction_flat_progress"
+RCC_TARGET_TABLE = "construction_rcc_targets"
 
 
 @dataclass(frozen=True)
@@ -54,34 +55,36 @@ def _prefixed_cp(heading: str, section: str, prefix: str, label: str, consumptio
 
 
 RCC_CHECKPOINTS = [
-    _cp("RCC Work", "RCC Work", "Excavation", "excavation"),
-    _cp("RCC Work", "RCC Work", "PCC", "pcc"),
-    _cp("RCC Work", "RCC Work", "Raft", "raft"),
-    _cp("RCC Work", "RCC Work", "Footing", "footing"),
-    _cp("RCC Work", "RCC Work", "Line out & wooden thesi", "lineout_wooden_thesi", ["line_out_wooden_thesi", "line_out_and_wooden_thesi"]),
-    _cp("RCC Work", "RCC Work", "Column Steel Checking", "column_steel_checking", ["column_steel_binding_work", "columns_distribution_stirrups"]),
-    _cp("RCC Work", "RCC Work", "Beams Reinforcement work", "beams_reinforcement_work"),
-    _cp("RCC Work", "RCC Work", "Aluform Level Check", "aluform_level_check"),
-    _cp("RCC Work", "RCC Work", "Aluform Plum Check", "aluform_plum_check"),
-    _cp("RCC Work", "RCC Work", "Aluform Measurement Check", "aluform_measurement_check"),
-    _cp("RCC Work", "RCC Work", "Electrical Concealed boxes fixing", "electrical_concealed_boxes_fixing"),
-    _cp("RCC Work", "RCC Work", "Slab & Wall Conduit work", "slab_wall_conduit_work", ["slab_and_wall_conduit_work"]),
-    _cp("RCC Work", "RCC Work", "Sleeves fixing as per requirements", "sleeves_fixing_as_per_requirements"),
-    _cp("RCC Work", "RCC Work", "Slab Reinforcement work", "slab_reinforcement_work"),
-    _cp("RCC Work", "RCC Work", "Support work for Aluform shuttering", "support_work_for_aluform_shuttering"),
-    _cp("RCC Work", "RCC Work", "Sunk sides for Toilet & Terrace", "sunksides_for_toilet_terrace", ["sunk_sides_for_toilet_terrace", "sunk_sides_for_toilet_and_terrace"]),
-    _cp("RCC Work", "RCC Work", "Cover blocks as per requirement", "cover_blocks_as_per_requirement"),
-    _cp("RCC Work", "RCC Work", "RCC Consultant Checking", "rcc_consultant_checking"),
-    _cp("RCC Work", "RCC Work", "MEP Consultant Checking", "mep_consultant_checking"),
-    _cp("RCC Work", "RCC Work", "Architect Checking", "architect_checking"),
-    _cp("RCC Work", "RCC Work", "Levelling of slab / Terrace / Toilet Gala", "levelling_of_slab_terrace_toilet_gala"),
-    _cp("RCC Work", "RCC Work", "Pour casting as per drawing", "pour_casting_as_per_drawing"),
-    _cp("RCC Work", "RCC Work", "After casting-Curing & Ponding", "after_casting_curing_ponding", ["after_casting_curing_ponding"]),
-    _cp("RCC Work", "RCC Work", "Tie patti/ Tie Rod holes filling for Previous slab", "tie_patti_tie_rod_holes_filling_for_previous_slab"),
-    _cp("RCC Work", "RCC Work", "Tachya / Hacking as per requirement", "tachya_hacking_as_per_requirement"),
-    _cp("RCC Work", "RCC Work", "Grinding / Excess Concrete chipping if any", "grinding_excess_concrete_chipping_if_any"),
-    _cp("RCC Work", "RCC Work", "Podium", "podium"),
-    _cp("RCC Work", "RCC Work", "Cleaning and Handover", "cleaning_and_handover"),
+    _cp("Pre-RCC Work", "Pre-RCC Work", "Excavation", "excavation"),
+    _cp("Pre-RCC Work", "Pre-RCC Work", "PCC", "pcc"),
+    _cp("Raft", "Raft", "Raft", "raft"),
+    _cp("Raft", "Raft", "Footing", "footing"),
+    _cp("Column", "Column", "Line out & wooden thesi", "lineout_wooden_thesi", ["line_out_wooden_thesi", "line_out_and_wooden_thesi"]),
+    _cp("Column", "Column", "Starter", "starter"),
+    _cp("Column", "Column", "Column Steel Checking", "column_steel_checking", ["column_steel_binding_work", "columns_distribution_stirrups"]),
+    _cp("Column", "Column", "Column Casting Done", "column_casting"),
+    _cp("Slab Casting", "Slab Casting", "Beams Reinforcement work", "beams_reinforcement_work"),
+    _cp("Slab Casting", "Slab Casting", "Aluform Level Check", "aluform_level_check"),
+    _cp("Slab Casting", "Slab Casting", "Aluform Plum Check", "aluform_plum_check"),
+    _cp("Slab Casting", "Slab Casting", "Aluform Measurement Check", "aluform_measurement_check"),
+    _cp("Slab Casting", "Slab Casting", "Electrical Concealed boxes fixing", "electrical_concealed_boxes_fixing"),
+    _cp("Slab Casting", "Slab Casting", "Slab & Wall Conduit work", "slab_wall_conduit_work", ["slab_and_wall_conduit_work"]),
+    _cp("Slab Casting", "Slab Casting", "Sleeves fixing as per requirements", "sleeves_fixing_as_per_requirements"),
+    _cp("Slab Casting", "Slab Casting", "Slab Reinforcement work", "slab_reinforcement_work"),
+    _cp("Slab Casting", "Slab Casting", "Support work for Aluform shuttering", "support_work_for_aluform_shuttering"),
+    _cp("Slab Casting", "Slab Casting", "Sunk sides for Toilet & Terrace", "sunksides_for_toilet_terrace", ["sunk_sides_for_toilet_terrace", "sunk_sides_for_toilet_and_terrace"]),
+    _cp("Slab Casting", "Slab Casting", "Cover blocks as per requirement", "cover_blocks_as_per_requirement"),
+    _cp("Slab Casting", "Slab Casting", "RCC Consultant Checking", "rcc_consultant_checking"),
+    _cp("Slab Casting", "Slab Casting", "MEP Consultant Checking", "mep_consultant_checking"),
+    _cp("Slab Casting", "Slab Casting", "Architect Checking", "architect_checking"),
+    _cp("Slab Casting", "Slab Casting", "Levelling of slab / Terrace / Toilet Gala", "levelling_of_slab_terrace_toilet_gala"),
+    _cp("Slab Casting", "Slab Casting", "Pour casting as per drawing", "pour_casting_as_per_drawing"),
+    _cp("Post Slab Casting", "Post Slab Casting", "After casting-Curing & Ponding", "after_casting_curing_ponding", ["after_casting_curing_ponding"]),
+    _cp("Post Slab Casting", "Post Slab Casting", "Tie patti/ Tie Rod holes filling for Previous slab", "tie_patti_tie_rod_holes_filling_for_previous_slab"),
+    _cp("Post Slab Casting", "Post Slab Casting", "Tachya / Hacking as per requirement", "tachya_hacking_as_per_requirement"),
+    _cp("Post Slab Casting", "Post Slab Casting", "Grinding / Excess Concrete chipping if any", "grinding_excess_concrete_chipping_if_any"),
+    _cp("Post Slab Casting", "Post Slab Casting", "Podium", "podium"),
+    _cp("Post Slab Casting", "Post Slab Casting", "Cleaning and Handover", "cleaning_and_handover"),
 ]
 
 
@@ -227,9 +230,11 @@ FLAT_CHECKPOINT_GROUPS = {
 }
 
 FLAT_CHECKPOINTS = [cp for checkpoints in FLAT_CHECKPOINT_GROUPS.values() for cp in checkpoints]
-ALL_WORK_HEADINGS = ["RCC Work"] + list(FLAT_CHECKPOINT_GROUPS.keys())
+RCC_WORK_HEADINGS = list(dict.fromkeys(cp.heading for cp in RCC_CHECKPOINTS))
+ALL_WORK_HEADINGS = RCC_WORK_HEADINGS + list(FLAT_CHECKPOINT_GROUPS.keys())
 FOUNDATION_RCC_SLUGS = {"excavation", "pcc", "raft", "footing"}
 PARKING_RCC_SKIP_SLUGS = {"sunksides_for_toilet_terrace", "cover_blocks_as_per_requirement"}
+PARTIAL_RCC_SLUGS = {"footing", "starter", "column_casting"}
 
 
 def _norm_col(name: str) -> str:
@@ -325,6 +330,56 @@ def _format_qty(value, unit: str) -> str:
 
     text = f"{val:.2f}".rstrip("0").rstrip(".")
     return f"{text} {unit}"
+
+
+def _is_partial_rcc_checkpoint(cp: Checkpoint) -> bool:
+    return cp.slug in PARTIAL_RCC_SLUGS
+
+
+def _partial_count_columns(row, cp: Checkpoint) -> tuple[str | None, str | None]:
+    columns = list(row.index) if hasattr(row, "index") else []
+    done_col = _find_column(columns, [f"{cp.slug}_done_count", f"{cp.slug}_done"])
+    total_col = _find_column(columns, [f"{cp.slug}_total_count", f"{cp.slug}_total"])
+    return done_col, total_col
+
+
+def _int_value(value) -> int:
+    try:
+        if value is None or pd.isna(value) or str(value).strip() == "":
+            return 0
+        return max(0, int(float(value)))
+    except Exception:
+        return 0
+
+
+def _partial_counts(row, cp: Checkpoint) -> tuple[int, int]:
+    done_col, total_col = _partial_count_columns(row, cp)
+    done = _int_value(row.get(done_col)) if done_col else 0
+    total = _int_value(row.get(total_col)) if total_col else 0
+    return done, total
+
+
+def _partial_count_label(row, cp: Checkpoint) -> str:
+    done, total = _partial_counts(row, cp)
+    if total <= 0 and done <= 0:
+        return "-"
+    return f"{done}/{total}"
+
+
+def _partial_progress_ratio(row, cp: Checkpoint) -> float | None:
+    done, total = _partial_counts(row, cp)
+    if total <= 0:
+        return None
+    return max(0.0, min(done / total, 1.0))
+
+
+def _partial_status(row, cp: Checkpoint, date_value) -> str:
+    done, total = _partial_counts(row, cp)
+    if total > 0 and done >= total:
+        return "Done"
+    if done > 0 or _is_done(date_value):
+        return "In Progress"
+    return "Pending"
 
 
 def _step_index(value) -> int:
@@ -579,16 +634,19 @@ def _flat_short_label_from_name(flat_name: str, wing: str) -> str:
     return label
 
 
-def _row_progress(row, checkpoints: list[Checkpoint], col_map: dict[Checkpoint, str | None]) -> tuple[int, int, float]:
+def _row_progress(row, checkpoints: list[Checkpoint], col_map: dict[Checkpoint, str | None]) -> tuple[float, int, float]:
     total = 0
-    done = 0
+    done = 0.0
 
     for cp in checkpoints:
         col = col_map.get(cp)
         if not col:
             continue
         total += 1
-        if _is_done(row.get(col)):
+        partial_ratio = _partial_progress_ratio(row, cp) if _is_partial_rcc_checkpoint(cp) else None
+        if partial_ratio is not None:
+            done += partial_ratio
+        elif _is_done(row.get(col)):
             done += 1
 
     pct = 0.0 if total == 0 else (done / total) * 100
@@ -615,13 +673,15 @@ def _work_progress_for_level(
     rows = []
 
     rcc_cps = _active_rcc_checkpoints(floor_row)
-    done, total, pct = _row_progress(floor_row, rcc_cps, floor_col_map)
-    rows.append({
-        "Main Work": "RCC Work",
-        "Done": done,
-        "Total": total,
-        "Progress %": pct,
-    })
+    for heading in dict.fromkeys(cp.heading for cp in rcc_cps):
+        heading_cps = [cp for cp in rcc_cps if cp.heading == heading]
+        done, total, pct = _row_progress(floor_row, heading_cps, floor_col_map)
+        rows.append({
+            "Main Work": heading,
+            "Done": done,
+            "Total": total,
+            "Progress %": pct,
+        })
 
     if _is_structure_only_level(floor_row):
         return pd.DataFrame(rows)
@@ -764,6 +824,119 @@ def _load_data(supabase_client):
     return floor_df, flat_df
 
 
+def _load_rcc_targets(supabase_client) -> pd.DataFrame:
+    try:
+        return _load_table(supabase_client, RCC_TARGET_TABLE)
+    except Exception as exc:
+        st.warning(f"Could not load `{RCC_TARGET_TABLE}`. Please run the latest SQL migration. Details: {exc}")
+        return pd.DataFrame()
+
+
+def _save_rcc_targets(supabase_client, targets: list[dict]):
+    if not targets:
+        return
+
+    rows = []
+    for item in targets:
+        wing = str(item.get("wing", "")).strip().upper()
+        total_days = _int_value(item.get("total_days"))
+        if not wing:
+            continue
+        rows.append({
+            "wing": wing,
+            "total_days": total_days,
+            "updated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        })
+
+    if rows:
+        supabase_client.table(RCC_TARGET_TABLE).upsert(rows, on_conflict="wing").execute()
+
+
+def _rcc_target_days(target_df: pd.DataFrame, wing: str) -> int:
+    if target_df is None or target_df.empty:
+        return 0
+
+    wing_norm = str(wing or "").strip().upper()
+    df = target_df.copy()
+    if "wing" not in df.columns:
+        return 0
+
+    df["_wing_norm"] = df["wing"].fillna("").astype(str).str.strip().str.upper()
+    hit = df[df["_wing_norm"] == wing_norm]
+    if hit.empty or "total_days" not in hit.columns:
+        return 0
+
+    return _int_value(hit.iloc[0].get("total_days"))
+
+
+def _rcc_level_days(first_date, latest_date) -> int:
+    if pd.isna(first_date) or pd.isna(latest_date):
+        return 0
+
+    try:
+        return max(1, int((latest_date - first_date).days) + 1)
+    except Exception:
+        return 0
+
+
+def _rcc_delay_rows(
+    floor_df: pd.DataFrame,
+    floor_col_map: dict[Checkpoint, str | None],
+    wing: str,
+    target_days: int,
+) -> pd.DataFrame:
+    if floor_df is None or floor_df.empty:
+        return pd.DataFrame()
+
+    wing_df = floor_df[floor_df.apply(_wing_value, axis=1) == wing].copy()
+    if wing_df.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, floor_row in wing_df.iterrows():
+        active_cps = _active_rcc_checkpoints(floor_row)
+        done, total, progress = _row_progress(floor_row, active_cps, floor_col_map)
+        dates = _date_values_for_row(floor_row, active_cps, floor_col_map)
+        first_date = min(dates) if dates else pd.NaT
+        latest_date = max(dates) if dates else pd.NaT
+        days_used = _rcc_level_days(first_date, latest_date)
+
+        rows.append({
+            "Wing": wing,
+            "Level": _level_label(floor_row),
+            "Level Code": _level_code(floor_row),
+            "Display Order": _display_order(floor_row),
+            "RCC Done": done,
+            "RCC Total": total,
+            "RCC Progress %": progress,
+            "First RCC Date": first_date,
+            "Latest RCC Date": latest_date,
+            "Days Used": days_used,
+            "_floor_row": floor_row,
+        })
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+
+    total_target = max(_int_value(target_days), 0)
+    total_used = int(out["Days Used"].sum())
+    remaining_rows = out[out["RCC Progress %"] < 100]
+    remaining_count = int(len(remaining_rows))
+    remaining_days = max(total_target - total_used, 0)
+    delay_days = max(total_used - total_target, 0) if total_target > 0 else 0
+    per_remaining = (remaining_days / remaining_count) if remaining_count > 0 else 0.0
+
+    out["Target Days"] = total_target
+    out["Wing Days Used"] = total_used
+    out["Wing Days Left"] = remaining_days
+    out["Wing Delay Days"] = delay_days
+    out["Days Left"] = np.where(out["RCC Progress %"] < 100, per_remaining, 0.0)
+    out["Planned Remaining Days"] = np.where(out["RCC Progress %"] < 100, per_remaining, 0.0)
+
+    return out.sort_values("Display Order", ascending=False)
+
+
 def _update_row(supabase_client, table_name: str, row, payload: dict):
     query = supabase_client.table(table_name).update(payload)
 
@@ -791,6 +964,35 @@ def _save_checkpoints(supabase_client, table_name: str, row, checkpoints, col_ma
         col = col_map.get(cp)
         if not col:
             missing.append(cp.label)
+            continue
+
+        if table_name == FLOOR_TABLE and _is_partial_rcc_checkpoint(cp):
+            done_col, total_col = _partial_count_columns(row, cp)
+            if not done_col or not total_col:
+                missing.append(f"{cp.label} - Done/Total count columns")
+                continue
+
+            done_key = f"{form_prefix}_{cp.slug}_done_count"
+            total_key = f"{form_prefix}_{cp.slug}_total_count"
+            new_done = _int_value(st.session_state.get(done_key))
+            new_total = _int_value(st.session_state.get(total_key))
+
+            if new_total > 0 and new_done > new_total:
+                new_done = new_total
+
+            old_done = _int_value(row.get(done_col))
+            old_total = _int_value(row.get(total_col))
+            count_changed = (new_done != old_done) or (new_total != old_total)
+
+            if count_changed:
+                payload[done_col] = new_done
+                payload[total_col] = new_total
+
+            if new_done > 0 and (count_changed or not _is_done(row.get(col))):
+                payload[col] = save_date_value
+            elif new_done <= 0 and _is_done(row.get(col)):
+                payload[col] = None
+
             continue
 
         key = f"{form_prefix}_{cp.slug}"
@@ -838,6 +1040,7 @@ def _checkpoint_table(row, checkpoints, col_map) -> pd.DataFrame:
         col = col_map.get(cp)
         value = row.get(col) if col else None
         consumption_parts = []
+        count_text = _partial_count_label(row, cp) if _is_partial_rcc_checkpoint(cp) else "-"
 
         for field in _consumption_fields(cp):
             field_col = _consumption_column(row, cp, field["suffix"])
@@ -850,8 +1053,9 @@ def _checkpoint_table(row, checkpoints, col_map) -> pd.DataFrame:
             "Main Work": cp.heading,
             "Section": cp.section,
             "Checkpoint": cp.label,
-            "Status": "Done" if _is_done(value) else "Pending",
+            "Status": _partial_status(row, cp, value) if _is_partial_rcc_checkpoint(cp) else ("Done" if _is_done(value) else "Pending"),
             "Date": _date_label(value),
+            "Count": count_text,
             "Consumption": " / ".join(consumption_parts) if consumption_parts else "-",
         })
     return pd.DataFrame(rows)
@@ -867,14 +1071,27 @@ def _floor_detailed_report_df(floor_row, floor_flats: pd.DataFrame, floor_col_ma
     for cp in _active_rcc_checkpoints(floor_row):
         col = floor_col_map.get(cp)
         value = floor_row.get(col) if col else None
-        done = 1 if _is_done(value) else 0
+        if _is_partial_rcc_checkpoint(cp):
+            done_count, total_count = _partial_counts(floor_row, cp)
+            if total_count > 0:
+                done = done_count
+                total = total_count
+                pct = round((min(done_count, total_count) / total_count) * 100, 1)
+            else:
+                done = 1 if _is_done(value) else 0
+                total = 1
+                pct = 100.0 if done else 0.0
+        else:
+            done = 1 if _is_done(value) else 0
+            total = 1
+            pct = 100.0 if done else 0.0
         rows.append({
             "Main Work": cp.heading,
             "Section": cp.section,
             "Checkpoint": cp.label,
             "Done": done,
-            "Total": 1,
-            "Progress %": 100.0 if done else 0.0,
+            "Total": total,
+            "Progress %": pct,
             "Latest Date": _date_label(value),
         })
 
@@ -1263,14 +1480,48 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
             help="Use this date for newly checked RCC checkpoints.",
         )
 
-        for cp in active_cps:
-            col = floor_col_map.get(cp)
-            current = selected_row.get(col) if col else None
-            st.checkbox(
-                f"{cp.label} ({_date_label(current)})",
-                value=_is_done(current),
-                key=f"{form_prefix}_{cp.slug}",
-            )
+        for heading in dict.fromkeys(cp.heading for cp in active_cps):
+            heading_cps = [cp for cp in active_cps if cp.heading == heading]
+            st.markdown(f"##### {heading}")
+
+            for section in dict.fromkeys(cp.section for cp in heading_cps):
+                section_cps = [cp for cp in heading_cps if cp.section == section]
+                if section and section != heading:
+                    st.markdown(f"**{section}**")
+
+                for cp in section_cps:
+                    col = floor_col_map.get(cp)
+                    current = selected_row.get(col) if col else None
+                    if _is_partial_rcc_checkpoint(cp):
+                        done_col, total_col = _partial_count_columns(selected_row, cp)
+                        done_current = _int_value(selected_row.get(done_col)) if done_col else 0
+                        total_current = _int_value(selected_row.get(total_col)) if total_col else 0
+
+                        c_label, c_done, c_total, c_date = st.columns([2.6, 1, 1, 1.4])
+                        c_label.markdown(f"**{cp.label}**")
+                        with c_done:
+                            st.number_input(
+                                "Done",
+                                min_value=0,
+                                step=1,
+                                value=done_current,
+                                key=f"{form_prefix}_{cp.slug}_done_count",
+                            )
+                        with c_total:
+                            st.number_input(
+                                "Total",
+                                min_value=0,
+                                step=1,
+                                value=total_current,
+                                key=f"{form_prefix}_{cp.slug}_total_count",
+                            )
+                        c_date.caption(f"Last: {_date_label(current)}")
+                    else:
+                        st.checkbox(
+                            f"{cp.label} ({_date_label(current)})",
+                            value=_is_done(current),
+                            key=f"{form_prefix}_{cp.slug}",
+                        )
 
         save = st.form_submit_button("Save RCC Progress", type="primary", use_container_width=True)
 
@@ -1432,24 +1683,25 @@ def _json_data(value) -> str:
 
 
 def _render_clickable_floor_chart(data_by_wing: dict[str, list[dict]], title: str):
+    widget_id = _safe_key(title).lower() or "floor_chart"
     html = f"""
-    <div id="cpFloorApp" class="cp-iframe-shell">
+    <div id="cpFloorApp_{widget_id}" class="cp-iframe-shell">
       <div class="cp-topbar">
         <div>
           <div class="cp-iframe-heading">{escape(title)}</div>
           <div class="cp-iframe-sub">Click any floor to open detailed checkpoint progress.</div>
         </div>
         <div class="cp-topbar-actions">
-          <div id="floorWingBtns" class="cp-wing-buttons"></div>
-          <button id="floorFullscreen" class="cp-fullscreen-btn">Open Full Screen</button>
+          <div id="floorWingBtns_{widget_id}" class="cp-wing-buttons"></div>
+          <button id="floorFullscreen_{widget_id}" class="cp-fullscreen-btn">Open Full Screen</button>
         </div>
       </div>
-      <div id="floorKpis" class="cp-floor-kpis"></div>
-      <div id="floorGrid" class="cp-iframe-building"></div>
-      <div id="floorModal" class="cp-modal hidden">
+      <div id="floorKpis_{widget_id}" class="cp-floor-kpis"></div>
+      <div id="floorGrid_{widget_id}" class="cp-iframe-building"></div>
+      <div id="floorModal_{widget_id}" class="cp-modal hidden">
         <div class="cp-modal-card">
-          <button id="floorModalClose" class="cp-modal-close">×</button>
-          <div id="floorReport"></div>
+          <button id="floorModalClose_{widget_id}" class="cp-modal-close">×</button>
+          <div id="floorReport_{widget_id}"></div>
         </div>
       </div>
     </div>
@@ -1497,19 +1749,19 @@ def _render_clickable_floor_chart(data_by_wing: dict[str, list[dict]], title: st
     <script>
       const dataByWing = {_json_data(data_by_wing)};
       const wings = Object.keys(dataByWing);
-      const wingBtns = document.getElementById("floorWingBtns");
-      const kpis = document.getElementById("floorKpis");
-      const grid = document.getElementById("floorGrid");
-      const fullBtn = document.getElementById("floorFullscreen");
-      const modal = document.getElementById("floorModal");
-      const modalClose = document.getElementById("floorModalClose");
-      const report = document.getElementById("floorReport");
+      const wingBtns = document.getElementById("floorWingBtns_{widget_id}");
+      const kpis = document.getElementById("floorKpis_{widget_id}");
+      const grid = document.getElementById("floorGrid_{widget_id}");
+      const fullBtn = document.getElementById("floorFullscreen_{widget_id}");
+      const modal = document.getElementById("floorModal_{widget_id}");
+      const modalClose = document.getElementById("floorModalClose_{widget_id}");
+      const report = document.getElementById("floorReport_{widget_id}");
       let activeWing = wings[0] || "";
 
       modalClose.onclick = () => modal.classList.add("hidden");
       modal.onclick = (e) => {{ if (e.target === modal) modal.classList.add("hidden"); }};
       fullBtn.onclick = async () => {{
-        const shell = document.getElementById("cpFloorApp");
+        const shell = document.getElementById("cpFloorApp_{widget_id}");
         if (!document.fullscreenElement && shell.requestFullscreen) await shell.requestFullscreen();
         else if (document.exitFullscreen) await document.exitFullscreen();
       }};
@@ -2025,6 +2277,116 @@ def _render_floorwise(floor_df, flat_df, floor_col_map, flat_col_map, wings):
     _render_clickable_floor_chart(data_by_wing, "Floor-wise Progress")
 
 
+def _render_rcc_delay_tracking(supabase_client, floor_df, floor_col_map, wings):
+    st.markdown("### RCC Delay Tracking")
+
+    if floor_df.empty:
+        st.warning("No slab/floor rows found. Please run the construction progress SQL first.")
+        return
+
+    if not wings:
+        st.warning("No wings found.")
+        return
+
+    target_df = _load_rcc_targets(supabase_client)
+
+    st.markdown("#### Wing-wise RCC Target Days")
+    with st.form("cp_rcc_target_days_form", clear_on_submit=False):
+        cols = st.columns(min(4, max(1, len(wings))))
+        target_payload = []
+        for idx, wing in enumerate(wings):
+            with cols[idx % len(cols)]:
+                val = st.number_input(
+                    f"{wing} Wing",
+                    min_value=0,
+                    step=1,
+                    value=_rcc_target_days(target_df, wing),
+                    key=f"cp_rcc_target_{wing}",
+                )
+                target_payload.append({"wing": wing, "total_days": val})
+
+        save_targets = st.form_submit_button("Save RCC Target Days", type="primary", use_container_width=True)
+
+    if save_targets:
+        try:
+            _save_rcc_targets(supabase_client, target_payload)
+            st.success("RCC target days updated.")
+            st.session_state["cp_refresh"] = st.session_state.get("cp_refresh", 0) + 1
+            if hasattr(st, "rerun"):
+                st.rerun()
+            else:
+                st.experimental_rerun()
+        except Exception as exc:
+            st.error(f"Could not save RCC target days: {exc}")
+
+    target_df = _load_rcc_targets(supabase_client)
+    data_by_wing = {}
+    table_parts = []
+
+    for wing in wings:
+        target_days = _rcc_target_days(target_df, wing)
+        delay_df = _rcc_delay_rows(floor_df, floor_col_map, wing, target_days)
+        items = []
+
+        if not delay_df.empty:
+            wing_used = int(delay_df["Days Used"].sum())
+            wing_left = int(round(delay_df["Wing Days Left"].iloc[0]))
+            wing_delay = int(round(delay_df["Wing Delay Days"].iloc[0]))
+
+            for _, row in delay_df.iterrows():
+                pct = float(row["RCC Progress %"])
+                days_used = int(round(row["Days Used"]))
+                days_left = float(row["Days Left"])
+                if wing_delay > 0 and pct < 100:
+                    days_label = f"Used {days_used}d | Delay {wing_delay}d"
+                else:
+                    days_label = f"Used {days_used}d | Left {int(round(days_left))}d"
+
+                floor_row = row["_floor_row"]
+                report = _floor_detailed_report_df(floor_row, pd.DataFrame(), floor_col_map, {})
+                if not report.empty:
+                    report["Progress %"] = report["Progress %"].round(1)
+
+                items.append({
+                    "level": row["Level"],
+                    "progress": pct,
+                    "days": days_label,
+                    "color": _progress_color(pct),
+                    "report": report.to_dict("records") if not report.empty else [],
+                })
+
+            view_df = delay_df.drop(columns=["_floor_row"]).copy()
+            view_df["RCC Progress %"] = view_df["RCC Progress %"].round(1)
+            view_df["Days Left"] = view_df["Days Left"].round(1)
+            view_df["First RCC Date"] = view_df["First RCC Date"].apply(_date_label)
+            view_df["Latest RCC Date"] = view_df["Latest RCC Date"].apply(_date_label)
+            table_parts.append(view_df)
+
+            st.caption(f"{wing} Wing: target {target_days} days, used {wing_used} days, left {wing_left} days, delay {wing_delay} days.")
+
+        data_by_wing[wing] = items
+
+    _render_clickable_floor_chart(data_by_wing, "RCC Delay Tracking")
+
+    if table_parts:
+        table_df = pd.concat(table_parts, ignore_index=True)
+        show_cols = [
+            "Wing",
+            "Level",
+            "RCC Progress %",
+            "First RCC Date",
+            "Latest RCC Date",
+            "Days Used",
+            "Days Left",
+            "Target Days",
+            "Wing Days Used",
+            "Wing Days Left",
+            "Wing Delay Days",
+        ]
+        st.markdown("#### RCC Delay Detail Table")
+        st.dataframe(table_df[show_cols], use_container_width=True, hide_index=True)
+
+
 def _render_flatwise(flat_df, flat_col_map, wings):
     st.markdown("### Flat-wise Progress")
 
@@ -2285,5 +2647,3 @@ def render_construction_progress_tab(supabase_client):
 
     with consumption_tab:
         _render_consumption_tab(flat_df, wings)
-
-
