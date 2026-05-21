@@ -59,14 +59,19 @@ RCC_CHECKPOINTS = [
     _cp("Pre-RCC Work", "Pre-RCC Work", "PCC", "pcc"),
     _cp("Raft", "Raft", "Raft", "raft"),
     _cp("Raft", "Raft", "Footing", "footing"),
-    _cp("Column", "Column", "Line out & wooden thesi", "lineout_wooden_thesi", ["line_out_wooden_thesi", "line_out_and_wooden_thesi"]),
-    _cp("Column", "Column", "Starter", "starter"),
-    _cp("Column", "Column", "Column Steel Checking", "column_steel_checking", ["column_steel_binding_work", "columns_distribution_stirrups"]),
-    _cp("Column", "Column", "Column Casting Done", "column_casting"),
+    _cp("Column", "Starter", "Starter Checking", "starter_checking"),
+    _cp("Column", "Starter", "Starter Casting", "starter"),
+    _cp("Column", "Column Checking", "Line out & wooden thesi", "lineout_wooden_thesi", ["line_out_wooden_thesi", "line_out_and_wooden_thesi"]),
+    _cp("Column", "Column Checking", "Column Steel Checking", "column_steel_checking", ["column_steel_binding_work", "columns_distribution_stirrups"]),
+    _cp("Column", "Column Checking", "Aluform Level Check", "aluform_level_check"),
+    _cp("Column", "Column Checking", "Aluform Plum Check", "aluform_plum_check"),
+    _cp("Column", "Column Checking", "Aluform Measurement Check", "aluform_measurement_check"),
+    _cp("Column", "Column Casting", "Column Casting", "column_casting"),
+    _cp("Column", "First Stage Column", "First Stage Column Checking", "first_stage_column_checking"),
+    _cp("Column", "First Stage Column", "First Stage Column Casting", "first_stage_column_casting"),
+    _cp("Column", "Second Stage Column", "Second Stage Column Checking", "second_stage_column_checking"),
+    _cp("Column", "Second Stage Column", "Second Stage Column Casting", "second_stage_column_casting"),
     _cp("Slab Casting", "Slab Casting", "Beams Reinforcement work", "beams_reinforcement_work"),
-    _cp("Slab Casting", "Slab Casting", "Aluform Level Check", "aluform_level_check"),
-    _cp("Slab Casting", "Slab Casting", "Aluform Plum Check", "aluform_plum_check"),
-    _cp("Slab Casting", "Slab Casting", "Aluform Measurement Check", "aluform_measurement_check"),
     _cp("Slab Casting", "Slab Casting", "Electrical Concealed boxes fixing", "electrical_concealed_boxes_fixing"),
     _cp("Slab Casting", "Slab Casting", "Slab & Wall Conduit work", "slab_wall_conduit_work", ["slab_and_wall_conduit_work"]),
     _cp("Slab Casting", "Slab Casting", "Sleeves fixing as per requirements", "sleeves_fixing_as_per_requirements"),
@@ -234,7 +239,26 @@ RCC_WORK_HEADINGS = list(dict.fromkeys(cp.heading for cp in RCC_CHECKPOINTS))
 ALL_WORK_HEADINGS = RCC_WORK_HEADINGS + list(FLAT_CHECKPOINT_GROUPS.keys())
 FOUNDATION_RCC_SLUGS = {"excavation", "pcc", "raft", "footing"}
 PARKING_RCC_SKIP_SLUGS = {"sunksides_for_toilet_terrace", "cover_blocks_as_per_requirement"}
-PARTIAL_RCC_SLUGS = {"footing", "starter", "column_casting"}
+PARTIAL_RCC_SLUGS = {"footing", "starter", "column_casting", "first_stage_column_casting", "second_stage_column_casting"}
+RCC_RANGE_SLUGS = {
+    "excavation",
+    "pcc",
+    "raft",
+    "footing",
+    "starter",
+    "column_casting",
+    "first_stage_column_casting",
+    "second_stage_column_casting",
+    "pour_casting_as_per_drawing",
+}
+BASEMENT_COLUMN_REPLACEMENT_SLUGS = {
+    "lineout_wooden_thesi",
+    "column_steel_checking",
+    "aluform_level_check",
+    "aluform_plum_check",
+    "aluform_measurement_check",
+    "column_casting",
+}
 
 
 def _norm_col(name: str) -> str:
@@ -334,6 +358,43 @@ def _format_qty(value, unit: str) -> str:
 
 def _is_partial_rcc_checkpoint(cp: Checkpoint) -> bool:
     return cp.slug in PARTIAL_RCC_SLUGS
+
+
+def _is_range_rcc_checkpoint(cp: Checkpoint) -> bool:
+    return cp.slug in RCC_RANGE_SLUGS
+
+
+def _range_date_columns(row, cp: Checkpoint) -> tuple[str | None, str | None]:
+    columns = list(row.index) if hasattr(row, "index") else []
+    start_col = _find_column(columns, [f"{cp.slug}_start_date", f"{cp.slug}_start"])
+    end_col = _find_column(columns, [f"{cp.slug}_end_date", f"{cp.slug}_end"])
+    return start_col, end_col
+
+
+def _range_dates(row, cp: Checkpoint) -> tuple[object, object]:
+    start_col, end_col = _range_date_columns(row, cp)
+    return (
+        row.get(start_col) if start_col else None,
+        row.get(end_col) if end_col else None,
+    )
+
+
+def _range_status(row, cp: Checkpoint, fallback_value) -> str:
+    start_value, end_value = _range_dates(row, cp)
+    if _is_done(end_value) or _is_done(fallback_value):
+        return "Done"
+    if _is_done(start_value):
+        return "In Progress"
+    return "Pending"
+
+
+def _range_progress_ratio(row, cp: Checkpoint) -> float | None:
+    start_value, end_value = _range_dates(row, cp)
+    if _is_done(end_value):
+        return 1.0
+    if _is_done(start_value):
+        return 0.5
+    return None
 
 
 def _partial_count_columns(row, cp: Checkpoint) -> tuple[str | None, str | None]:
@@ -534,6 +595,14 @@ def _is_parking_level(row) -> bool:
     )
 
 
+def _is_basement_level(row) -> bool:
+    label = _level_label(row).strip().lower()
+    code = _level_code(row).strip().lower()
+    floor_no = _floor_no(row)
+
+    return label == "basement" or code == "basement" or floor_no == -1
+
+
 def _is_pre_rcc_level(row) -> bool:
     label = _level_label(row).strip().lower()
     code = _level_code(row).strip().lower()
@@ -567,7 +636,13 @@ def _active_rcc_checkpoints(row) -> list[Checkpoint]:
         return [cp for cp in RCC_CHECKPOINTS if cp.slug in FOUNDATION_RCC_SLUGS]
 
     if not _is_parking_level(row):
-        return [cp for cp in RCC_CHECKPOINTS if cp.slug not in FOUNDATION_RCC_SLUGS and cp.slug != "podium"]
+        return [
+            cp for cp in RCC_CHECKPOINTS
+            if cp.slug not in FOUNDATION_RCC_SLUGS
+            and cp.slug != "podium"
+            and not cp.slug.startswith("first_stage_column_")
+            and not cp.slug.startswith("second_stage_column_")
+        ]
 
     active = []
     for cp in RCC_CHECKPOINTS:
@@ -575,6 +650,11 @@ def _active_rcc_checkpoints(row) -> list[Checkpoint]:
         if slug in FOUNDATION_RCC_SLUGS:
             continue
         if slug == "podium" and not _is_ground_or_stilt_level(row):
+            continue
+        if _is_basement_level(row):
+            if slug in BASEMENT_COLUMN_REPLACEMENT_SLUGS:
+                continue
+        elif slug.startswith("first_stage_column_") or slug.startswith("second_stage_column_"):
             continue
         if slug in PARKING_RCC_SKIP_SLUGS:
             continue
@@ -644,8 +724,11 @@ def _row_progress(row, checkpoints: list[Checkpoint], col_map: dict[Checkpoint, 
             continue
         total += 1
         partial_ratio = _partial_progress_ratio(row, cp) if _is_partial_rcc_checkpoint(cp) else None
+        range_ratio = _range_progress_ratio(row, cp) if _is_range_rcc_checkpoint(cp) else None
         if partial_ratio is not None:
             done += partial_ratio
+        elif range_ratio is not None:
+            done += range_ratio
         elif _is_done(row.get(col)):
             done += 1
 
@@ -656,6 +739,12 @@ def _row_progress(row, checkpoints: list[Checkpoint], col_map: dict[Checkpoint, 
 def _date_values_for_row(row, checkpoints: list[Checkpoint], col_map: dict[Checkpoint, str | None]) -> list[pd.Timestamp]:
     dates = []
     for cp in checkpoints:
+        if _is_range_rcc_checkpoint(cp):
+            start_value, end_value = _range_dates(row, cp)
+            for range_value in (start_value, end_value):
+                d = _parse_date(range_value)
+                if pd.notna(d):
+                    dates.append(d)
         col = col_map.get(cp)
         if col:
             d = _parse_date(row.get(col))
@@ -966,6 +1055,26 @@ def _save_checkpoints(supabase_client, table_name: str, row, checkpoints, col_ma
             missing.append(cp.label)
             continue
 
+        if table_name == FLOOR_TABLE and _is_range_rcc_checkpoint(cp):
+            start_col, end_col = _range_date_columns(row, cp)
+            if not start_col or not end_col:
+                missing.append(f"{cp.label} - Start/End date columns")
+            else:
+                old_start_done = _is_done(row.get(start_col))
+                set_start_key = f"{form_prefix}_{cp.slug}_set_start"
+                start_date_key = f"{form_prefix}_{cp.slug}_start_date"
+                if (not old_start_done) and bool(st.session_state.get(set_start_key, False)):
+                    start_value = st.session_state.get(start_date_key, save_date)
+                    payload[start_col] = start_value.isoformat() if hasattr(start_value, "isoformat") else str(start_value)
+
+                set_end_key = f"{form_prefix}_{cp.slug}_set_end"
+                end_date_key = f"{form_prefix}_{cp.slug}_end_date"
+                if bool(st.session_state.get(set_end_key, False)):
+                    end_value = st.session_state.get(end_date_key, save_date)
+                    end_iso = end_value.isoformat() if hasattr(end_value, "isoformat") else str(end_value)
+                    payload[end_col] = end_iso
+                    payload[col] = end_iso
+
         if table_name == FLOOR_TABLE and _is_partial_rcc_checkpoint(cp):
             done_col, total_col = _partial_count_columns(row, cp)
             if not done_col or not total_col:
@@ -982,6 +1091,8 @@ def _save_checkpoints(supabase_client, table_name: str, row, checkpoints, col_ma
 
             old_done = _int_value(row.get(done_col))
             old_total = _int_value(row.get(total_col))
+            if old_total > 0:
+                new_total = old_total
             count_changed = (new_done != old_done) or (new_total != old_total)
 
             if count_changed:
@@ -993,6 +1104,9 @@ def _save_checkpoints(supabase_client, table_name: str, row, checkpoints, col_ma
             elif new_done <= 0 and _is_done(row.get(col)):
                 payload[col] = None
 
+            continue
+
+        if table_name == FLOOR_TABLE and _is_range_rcc_checkpoint(cp):
             continue
 
         key = f"{form_prefix}_{cp.slug}"
@@ -1041,6 +1155,7 @@ def _checkpoint_table(row, checkpoints, col_map) -> pd.DataFrame:
         value = row.get(col) if col else None
         consumption_parts = []
         count_text = _partial_count_label(row, cp) if _is_partial_rcc_checkpoint(cp) else "-"
+        start_value, end_value = _range_dates(row, cp) if _is_range_rcc_checkpoint(cp) else (None, None)
 
         for field in _consumption_fields(cp):
             field_col = _consumption_column(row, cp, field["suffix"])
@@ -1053,7 +1168,13 @@ def _checkpoint_table(row, checkpoints, col_map) -> pd.DataFrame:
             "Main Work": cp.heading,
             "Section": cp.section,
             "Checkpoint": cp.label,
-            "Status": _partial_status(row, cp, value) if _is_partial_rcc_checkpoint(cp) else ("Done" if _is_done(value) else "Pending"),
+            "Status": (
+                _partial_status(row, cp, value)
+                if _is_partial_rcc_checkpoint(cp)
+                else (_range_status(row, cp, value) if _is_range_rcc_checkpoint(cp) else ("Done" if _is_done(value) else "Pending"))
+            ),
+            "Start Date": _date_label(start_value) if _is_range_rcc_checkpoint(cp) else "-",
+            "End Date": _date_label(end_value) if _is_range_rcc_checkpoint(cp) else "-",
             "Date": _date_label(value),
             "Count": count_text,
             "Consumption": " / ".join(consumption_parts) if consumption_parts else "-",
@@ -1078,13 +1199,17 @@ def _floor_detailed_report_df(floor_row, floor_flats: pd.DataFrame, floor_col_ma
                 total = total_count
                 pct = round((min(done_count, total_count) / total_count) * 100, 1)
             else:
-                done = 1 if _is_done(value) else 0
+                range_ratio = _range_progress_ratio(floor_row, cp) if _is_range_rcc_checkpoint(cp) else None
+                done = range_ratio if range_ratio is not None else (1 if _is_done(value) else 0)
                 total = 1
-                pct = 100.0 if done else 0.0
+                pct = round(float(done) * 100, 1) if done else 0.0
         else:
-            done = 1 if _is_done(value) else 0
+            range_ratio = _range_progress_ratio(floor_row, cp) if _is_range_rcc_checkpoint(cp) else None
+            done = range_ratio if range_ratio is not None else (1 if _is_done(value) else 0)
             total = 1
-            pct = 100.0 if done else 0.0
+            pct = round(float(done) * 100, 1) if done else 0.0
+        start_value, end_value = _range_dates(floor_row, cp) if _is_range_rcc_checkpoint(cp) else (None, None)
+        latest_display = end_value if _is_done(end_value) else (start_value if _is_done(start_value) else value)
         rows.append({
             "Main Work": cp.heading,
             "Section": cp.section,
@@ -1092,7 +1217,7 @@ def _floor_detailed_report_df(floor_row, floor_flats: pd.DataFrame, floor_col_ma
             "Done": done,
             "Total": total,
             "Progress %": pct,
-            "Latest Date": _date_label(value),
+            "Latest Date": _date_label(latest_display),
         })
 
     if _is_structure_only_level(floor_row) or floor_flats is None or floor_flats.empty:
@@ -1492,6 +1617,69 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
                 for cp in section_cps:
                     col = floor_col_map.get(cp)
                     current = selected_row.get(col) if col else None
+                    if _is_range_rcc_checkpoint(cp):
+                        start_value, end_value = _range_dates(selected_row, cp)
+                        start_date = _parse_date(start_value)
+                        end_date = _parse_date(end_value)
+                        start_done = pd.notna(start_date)
+                        end_done = pd.notna(end_date)
+
+                        st.markdown(f"**{cp.label}**")
+                        date_c1, date_c2, date_c3 = st.columns([1.2, 1.2, 1.1])
+                        with date_c1:
+                            if start_done:
+                                st.caption(f"Start locked: {_date_label(start_value)}")
+                            else:
+                                st.checkbox(
+                                    "Set Start",
+                                    key=f"{form_prefix}_{cp.slug}_set_start",
+                                )
+                                st.date_input(
+                                    "Start Date",
+                                    value=selected_work_date,
+                                    key=f"{form_prefix}_{cp.slug}_start_date",
+                                    format="DD/MM/YYYY",
+                                )
+                        with date_c2:
+                            st.checkbox(
+                                "Set End",
+                                key=f"{form_prefix}_{cp.slug}_set_end",
+                            )
+                            st.date_input(
+                                "End Date",
+                                value=end_date.date() if end_done else selected_work_date,
+                                key=f"{form_prefix}_{cp.slug}_end_date",
+                                format="DD/MM/YYYY",
+                            )
+                        with date_c3:
+                            st.caption(f"Completion: {_date_label(current)}")
+
+                        if _is_partial_rcc_checkpoint(cp):
+                            done_col, total_col = _partial_count_columns(selected_row, cp)
+                            done_current = _int_value(selected_row.get(done_col)) if done_col else 0
+                            total_current = _int_value(selected_row.get(total_col)) if total_col else 0
+                            count_done, count_total, count_hint = st.columns([1, 1, 2])
+                            with count_done:
+                                st.number_input(
+                                    "Done Count",
+                                    min_value=0,
+                                    step=1,
+                                    value=done_current,
+                                    key=f"{form_prefix}_{cp.slug}_done_count",
+                                )
+                            with count_total:
+                                st.number_input(
+                                    "Total Count",
+                                    min_value=0,
+                                    step=1,
+                                    value=total_current,
+                                    disabled=total_current > 0,
+                                    key=f"{form_prefix}_{cp.slug}_total_count",
+                                )
+                            count_hint.caption("Total count locks after first save." if total_current > 0 else "Enter total once; it will lock after save.")
+                        st.divider()
+                        continue
+
                     if _is_partial_rcc_checkpoint(cp):
                         done_col, total_col = _partial_count_columns(selected_row, cp)
                         done_current = _int_value(selected_row.get(done_col)) if done_col else 0
@@ -1513,9 +1701,10 @@ def _render_update_slab(supabase_client, floor_df, floor_col_map):
                                 min_value=0,
                                 step=1,
                                 value=total_current,
+                                disabled=total_current > 0,
                                 key=f"{form_prefix}_{cp.slug}_total_count",
                             )
-                        c_date.caption(f"Last: {_date_label(current)}")
+                        c_date.caption("Total locked" if total_current > 0 else f"Last: {_date_label(current)}")
                     else:
                         st.checkbox(
                             f"{cp.label} ({_date_label(current)})",
