@@ -19,6 +19,24 @@ _run_app_file("tabs/inventory_status.py")
 LABOUR_TABLE = "construction_labour_counts"
 CONCRETE_TABLE = "construction_concrete_consumption"
 
+DPR_ALL_SLABS = [
+    "BOOKING AMOUNT",
+    "AGREEMENT",
+    "PLINTH",
+    "3RD FLOOR",
+    "7TH FLOOR",
+    "10TH FLOOR",
+    "13TH FLOOR",
+    "FLOORING",
+    "PLASTERING",
+    "PLUMBING",
+    "ELECTRICAL",
+    "SANITARY & LIFT",
+    "POSSESSION",
+]
+
+DPR_CONSTRUCTION_SLABS = DPR_ALL_SLABS[2:]
+
 
 def _dpr_norm_col(name: str) -> str:
     return "".join(ch for ch in str(name or "").lower() if ch.isalnum())
@@ -165,6 +183,111 @@ def _dpr_status_count_on_date(df: pd.DataFrame, col: str | None, target_date: _d
 
     parsed_dates = _dpr_date_series(df[col])
     return int((parsed_dates.notna() & (parsed_dates.dt.date == target_date)).sum())
+
+
+def _dpr_status_present_value(value) -> bool:
+    if pd.isna(value):
+        return False
+
+    s = str(value).strip().lower()
+    return s not in {
+        "",
+        "pending",
+        "not received",
+        "not recieved",
+        "not done",
+        "not given",
+        "no",
+        "n",
+        "false",
+        "0",
+        "na",
+        "n/a",
+        "nan",
+        "nat",
+        "none",
+        "null",
+        "-",
+    }
+
+
+def _dpr_norm_wing(value):
+    s = str(value or "").strip().upper().replace("-", " ").replace("_", " ")
+    s = " ".join(s.split())
+    if not s:
+        return ""
+    s = re.sub(r"\s*WING\s*$", "", s).strip()
+    s = re.sub(r"^WING\s*", "", s).strip()
+    return f"{s} Wing"
+
+
+def _dpr_gross_agreement_value(agreement_cost):
+    agreement = _dpr_to_num(agreement_cost)
+    gst_rate = 0.05 if agreement > 4499999 else 0.01
+    gst_amt = round(agreement * gst_rate, 2)
+    return round(agreement + gst_amt, 2)
+
+
+def _dpr_head_amounts(agreement_cost):
+    gross_value = _dpr_gross_agreement_value(agreement_cost)
+    return {
+        "BOOKING AMOUNT": round(gross_value * 5.0 / 100.0, 2),
+        "AGREEMENT": round(gross_value * 10.0 / 100.0, 2),
+        "PLINTH": round(gross_value * 15.0 / 100.0, 2),
+        "3RD FLOOR": round(gross_value * 7.5 / 100.0, 2),
+        "7TH FLOOR": round(gross_value * 7.5 / 100.0, 2),
+        "10TH FLOOR": round(gross_value * 7.5 / 100.0, 2),
+        "13TH FLOOR": round(gross_value * 7.5 / 100.0, 2),
+        "FLOORING": round(gross_value * 7.5 / 100.0, 2),
+        "PLASTERING": round(gross_value * 7.5 / 100.0, 2),
+        "PLUMBING": round(gross_value * 7.5 / 100.0, 2),
+        "ELECTRICAL": round(gross_value * 7.5 / 100.0, 2),
+        "SANITARY & LIFT": round(gross_value * 5.0 / 100.0, 2),
+        "POSSESSION": round(gross_value * 5.0 / 100.0, 2),
+    }
+
+
+def _dpr_current_stage_for_wing(wing, slab_master_df: pd.DataFrame) -> str:
+    if slab_master_df is None or slab_master_df.empty:
+        return DPR_CONSTRUCTION_SLABS[0]
+
+    wing_col = _dpr_col(slab_master_df, "wing", "Wing")
+    slab_col = _dpr_col(slab_master_df, "slab_name", "Slab Name")
+    completed_col = _dpr_col(slab_master_df, "completed", "Completed")
+
+    if not wing_col or not slab_col or not completed_col:
+        return DPR_CONSTRUCTION_SLABS[0]
+
+    target_wing = _dpr_norm_wing(wing).upper()
+    df = slab_master_df.copy()
+    df["_wing_norm"] = df[wing_col].apply(_dpr_norm_wing).astype(str).str.upper()
+    df["_slab_norm"] = df[slab_col].fillna("").astype(str).str.strip().str.upper()
+    df["_completed"] = (
+        df[completed_col]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin(["completed", "done", "yes", "true", "1"])
+    )
+
+    completed = set(df.loc[df["_wing_norm"].eq(target_wing) & df["_completed"], "_slab_norm"].tolist())
+
+    for slab in DPR_CONSTRUCTION_SLABS:
+        if slab not in completed:
+            return slab
+
+    return DPR_CONSTRUCTION_SLABS[-1]
+
+
+def _dpr_due_order_for_stage(row, stage: str, agreement_done_col: str | None) -> list[str]:
+    order = ["BOOKING AMOUNT"]
+    if agreement_done_col and _dpr_status_present_value(row.get(agreement_done_col)):
+        order.append("AGREEMENT")
+        if stage in DPR_CONSTRUCTION_SLABS:
+            upto = DPR_CONSTRUCTION_SLABS.index(stage)
+            order.extend(DPR_CONSTRUCTION_SLABS[:upto + 1])
+    return order
 
 
 def _dpr_page_css():
@@ -454,7 +577,7 @@ def _dpr_build_sales_data(bookings_df: pd.DataFrame, target_date: _dt.date, raw_
     }
 
 
-def _dpr_build_cashflow_data(bookings_df: pd.DataFrame):
+def _dpr_build_cashflow_data(bookings_df: pd.DataFrame, slab_master_df: pd.DataFrame | None = None):
     if bookings_df is None or bookings_df.empty:
         return {
             "warning": "No booking data available.",
@@ -467,6 +590,7 @@ def _dpr_build_cashflow_data(bookings_df: pd.DataFrame):
     agreement_col = _dpr_col(df, "agreement_cost", "Agreement Cost")
     received_col = _dpr_col(df, "received_amount", "Received Amount")
     carpet_col = _dpr_col(df, "carpet_area", "Carpet Area")
+    agreement_done_col = _dpr_col(df, "agreement_done", "Agreement Done")
 
     if not agreement_col:
         return {
@@ -475,42 +599,65 @@ def _dpr_build_cashflow_data(bookings_df: pd.DataFrame):
             "wing_df": pd.DataFrame(),
         }
 
+    slab_master_df = slab_master_df if isinstance(slab_master_df, pd.DataFrame) else pd.DataFrame()
+
+    df["_wing_label"] = df[wing_col].apply(_dpr_norm_wing) if wing_col else "All Wings"
+    df["_current_stage"] = df["_wing_label"].apply(lambda w: _dpr_current_stage_for_wing(w, slab_master_df))
     df["_agreement"] = df[agreement_col].apply(_dpr_to_num)
     df["_received"] = df[received_col].apply(_dpr_to_num) if received_col else 0.0
-    df["_due"] = (df["_agreement"] - df["_received"]).clip(lower=0)
     df["_carpet"] = df[carpet_col].apply(_dpr_to_num) if carpet_col else 0.0
 
-    total_amount = float(df["_agreement"].sum())
-    total_received = float(df["_received"].sum())
-    total_due = float(df["_due"].sum())
+    totals_till_stage = []
+    received_till_stage = []
+    due_till_stage = []
+
+    for _, row in df.iterrows():
+        stage = row.get("_current_stage", DPR_CONSTRUCTION_SLABS[0])
+        order = _dpr_due_order_for_stage(row, stage, agreement_done_col)
+        amt_map = _dpr_head_amounts(row.get(agreement_col, 0))
+        total_stage = sum(_dpr_to_num(amt_map.get(head, 0)) for head in order)
+        received_stage = min(_dpr_to_num(row.get("_received", 0)), total_stage)
+        due_stage = max(total_stage - received_stage, 0.0)
+        totals_till_stage.append(total_stage)
+        received_till_stage.append(received_stage)
+        due_till_stage.append(due_stage)
+
+    df["_total_till_stage"] = totals_till_stage
+    df["_received_till_stage"] = received_till_stage
+    df["_due_till_stage"] = due_till_stage
+
+    total_amount = float(df["_total_till_stage"].sum())
+    total_received = float(df["_received_till_stage"].sum())
+    total_due = float(df["_due_till_stage"].sum())
     carpet_sold = float(df["_carpet"].sum())
 
     wing_summary = pd.DataFrame()
     if wing_col:
         wing_summary = (
-            df.groupby(wing_col, as_index=False)
+            df.groupby(["_wing_label", "_current_stage"], as_index=False)
             .agg(
                 **{
-                    "Total Amount": ("_agreement", "sum"),
-                    "Received": ("_received", "sum"),
-                    "Due": ("_due", "sum"),
+                    "Total Till Stage": ("_total_till_stage", "sum"),
+                    "Received Till Stage": ("_received_till_stage", "sum"),
+                    "Due Till Stage": ("_due_till_stage", "sum"),
                     "Carpet Area Sold": ("_carpet", "sum"),
                 }
             )
-            .rename(columns={wing_col: "Wing"})
+            .rename(columns={"_wing_label": "Wing", "_current_stage": "Current Stage"})
         )
 
-        for col in ["Total Amount", "Received", "Due"]:
+        for col in ["Total Till Stage", "Received Till Stage", "Due Till Stage"]:
             wing_summary[col] = wing_summary[col].apply(_dpr_fmt_money)
 
         wing_summary["Carpet Area Sold"] = wing_summary["Carpet Area Sold"].apply(lambda x: f"{_dpr_fmt_num(x)} sqft")
+        wing_summary = wing_summary.sort_values("Wing").reset_index(drop=True)
 
     return {
         "warning": None,
         "metrics": [
-            _dpr_metric("Total Amount", _dpr_fmt_money(total_amount), "Agreement cost total", "blue"),
-            _dpr_metric("Received", _dpr_fmt_money(total_received), "Amount received", "green"),
-            _dpr_metric("Due", _dpr_fmt_money(total_due), "Pending amount", "amber"),
+            _dpr_metric("Total Till Current Stage", _dpr_fmt_money(total_amount), "Only up to active slab/stage", "blue"),
+            _dpr_metric("Received Till Current Stage", _dpr_fmt_money(total_received), "Capped to current-stage demand", "green"),
+            _dpr_metric("Due Till Current Stage", _dpr_fmt_money(total_due), "Pending till active stage", "amber"),
             _dpr_metric("Carpet Area Sold", f"{_dpr_fmt_num(carpet_sold)} sqft", "Total sold carpet", "slate"),
         ],
         "wing_df": wing_summary,
@@ -522,19 +669,24 @@ def _dpr_construction_work_done(floor_df, flat_df, floor_col_map, flat_col_map, 
 
     if floor_df is not None and not floor_df.empty:
         for _, floor_row in floor_df.iterrows():
-            completed = []
+            completed_by_heading = {}
             for cp in _active_rcc_checkpoints(floor_row):
                 col = floor_col_map.get(cp)
                 if col:
                     d = _parse_date(floor_row.get(col))
                     if pd.notna(d) and d.date() == target_date:
-                        completed.append(cp.label)
+                        label = cp.label
+                        if _is_partial_rcc_checkpoint(cp):
+                            count_label = _partial_count_label(floor_row, cp)
+                            if count_label != "-":
+                                label = f"{label} ({count_label})"
+                        completed_by_heading.setdefault(cp.heading, []).append(label)
 
-            if completed:
+            for heading, completed in completed_by_heading.items():
                 rows.append({
                     "Wing": _wing_value(floor_row),
                     "Floor / Level": _level_label(floor_row),
-                    "Main Work": "RCC Work",
+                    "Main Work": heading,
                     "Work Done": ", ".join(completed),
                 })
 
@@ -671,6 +823,101 @@ def _dpr_build_construction_data(supabase_client, target_date: _dt.date):
     }
 
 
+def _dpr_build_rcc_tracking_data(supabase_client):
+    floor_df, flat_df = _load_data(supabase_client)
+    floor_col_map = _column_lookup(floor_df, RCC_CHECKPOINTS)
+    wings = _wing_options(floor_df, flat_df)
+    target_df = _load_rcc_targets(supabase_client)
+
+    wing_cards = []
+    table_rows = []
+    data_by_wing = {}
+
+    for wing in wings:
+        target_days = _rcc_target_days(target_df, wing)
+        delay_df = _rcc_delay_rows(floor_df, floor_col_map, wing, target_days)
+        if delay_df.empty:
+            continue
+
+        started = delay_df["RCC Progress %"].gt(0).any()
+        incomplete = delay_df["RCC Progress %"].lt(100).any()
+        if not (started and incomplete):
+            continue
+
+        used_days = int(delay_df["Days Used"].sum())
+        days_left = int(round(delay_df["Wing Days Left"].iloc[0]))
+        delay_days = int(round(delay_df["Wing Delay Days"].iloc[0]))
+        remaining_df = delay_df[delay_df["RCC Progress %"] < 100].copy()
+        active_df = delay_df[(delay_df["RCC Progress %"] > 0) & (delay_df["RCC Progress %"] < 100)].copy()
+
+        levels = []
+        for _, row in delay_df.iterrows():
+            pct = float(row["RCC Progress %"])
+            used = int(round(row["Days Used"]))
+            left = int(round(float(row["Days Left"])))
+            if delay_days > 0 and pct < 100:
+                day_text = f"Used {used}d | Delay {delay_days}d"
+            else:
+                day_text = f"Used {used}d | Left {left}d"
+
+            levels.append({
+                "level": row["Level"],
+                "progress": pct,
+                "days": day_text,
+                "color": _progress_color(pct),
+                "report": [],
+            })
+
+        data_by_wing[wing] = levels
+
+        rem_table = remaining_df.sort_values("Display Order", ascending=False).head(6).copy()
+        for _, row in rem_table.iterrows():
+            table_rows.append({
+                "Wing": f"{wing} Wing",
+                "Remaining Slab": row["Level"],
+                "Progress": f"{float(row['RCC Progress %']):.0f}%",
+                "Remaining Days": int(round(float(row["Days Left"]))),
+                "Target Days": target_days,
+            })
+
+        wing_cards.append({
+            "Wing": wing,
+            "Target Days": target_days,
+            "Used Days": used_days,
+            "Days Left": days_left,
+            "Delay Days": delay_days,
+            "Remaining Slabs": int(len(remaining_df)),
+            "Active Slabs": int(len(active_df)),
+            "Levels": levels,
+            "Remaining Table": [
+                {
+                    "Level": row["Level"],
+                    "Progress": f"{float(row['RCC Progress %']):.0f}%",
+                    "Days Left": int(round(float(row["Days Left"]))),
+                }
+                for _, row in rem_table.iterrows()
+            ],
+        })
+
+    total_target = sum(int(w["Target Days"]) for w in wing_cards)
+    total_used = sum(int(w["Used Days"]) for w in wing_cards)
+    total_left = sum(int(w["Days Left"]) for w in wing_cards)
+    total_delay = sum(int(w["Delay Days"]) for w in wing_cards)
+
+    return {
+        "metrics": [
+            _dpr_metric("Active RCC Wings", f"{len(wing_cards):,}", "Started and not completed", "blue"),
+            _dpr_metric("Target Days", f"{total_target:,}", "Active wings total", "slate"),
+            _dpr_metric("Used Days", f"{total_used:,}", "Across active wings", "green"),
+            _dpr_metric("Days Left", f"{total_left:,}", "Allocated to pending slabs", "amber"),
+            _dpr_metric("Delay Days", f"{total_delay:,}", "If used exceeds target", "slate"),
+        ],
+        "wing_cards": wing_cards,
+        "summary_df": pd.DataFrame(table_rows),
+        "data_by_wing": data_by_wing,
+    }
+
+
 def _dpr_render_sales_section(sales_data):
     _dpr_section_title("Sales Summary")
 
@@ -739,6 +986,24 @@ def _dpr_render_construction_section(construction_data):
         construction_data.get("work_done_df", pd.DataFrame()),
         "No construction checkpoints were marked done on selected date.",
         height=360,
+    )
+
+
+def _dpr_render_rcc_tracking_section(rcc_data):
+    _dpr_section_title("RCC Work Days Tracking")
+
+    _dpr_render_kpis(rcc_data.get("metrics", []), columns=5)
+
+    data_by_wing = rcc_data.get("data_by_wing", {})
+    if data_by_wing:
+        _render_clickable_floor_chart(data_by_wing, "RCC Work Days Tracking")
+    else:
+        st.info("No active RCC wing found. Wings appear here only after RCC work has started and before it is fully completed.")
+
+    _dpr_display_table(
+        "Remaining Slabs and Days",
+        rcc_data.get("summary_df", pd.DataFrame()),
+        "No remaining RCC slabs found for active wings.",
     )
 
 
@@ -845,13 +1110,10 @@ def _dpr_pdf_wrap(pdf: FPDF, text, width, size=7):
 
 
 def _dpr_pdf_table(pdf: FPDF, title: str, df: pd.DataFrame, max_rows=35):
-    _dpr_pdf_section(pdf, title)
-
     if df is None or df.empty:
-        pdf.set_font("Arial", "", 9)
-        pdf.set_text_color(71, 85, 105)
-        pdf.cell(0, 7, "No data available.", ln=True)
         return
+
+    _dpr_pdf_section(pdf, title)
 
     out = df.copy().head(max_rows)
     cols = list(out.columns)
@@ -926,6 +1188,100 @@ def _dpr_pdf_table(pdf: FPDF, title: str, df: pd.DataFrame, max_rows=35):
         pdf.cell(0, 6, f"Showing first {max_rows} rows of {len(df)} total rows.", ln=True)
 
 
+def _dpr_pdf_rcc_tracking(pdf: FPDF, rcc_data: dict):
+    wing_cards = rcc_data.get("wing_cards", []) or []
+    if not wing_cards:
+        return
+
+    if pdf.page_no() < 2:
+        pdf.add_page()
+    elif pdf.get_y() > 165:
+        pdf.add_page()
+
+    _dpr_pdf_section(pdf, "RCC Work Days Tracking")
+
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+    gap = 2.5
+    per_row = 4 if len(wing_cards) > 3 else max(1, len(wing_cards))
+    card_w = (page_w - gap * (per_row - 1)) / per_row
+    card_h = 55
+    start_x = pdf.l_margin
+    y = pdf.get_y()
+
+    for idx, wing in enumerate(wing_cards):
+        if idx and idx % per_row == 0:
+            y += card_h + 4
+
+        if y + card_h > 274:
+            break
+
+        x = start_x + (idx % per_row) * (card_w + gap)
+        levels = list(wing.get("Levels", []))[:16]
+        rem_rows = list(wing.get("Remaining Table", []))[:3]
+
+        pdf.set_draw_color(203, 213, 225)
+        pdf.set_fill_color(248, 250, 252)
+        pdf.rect(x, y, card_w, card_h, style="DF")
+
+        pdf.set_xy(x + 2, y + 2)
+        pdf.set_text_color(15, 23, 42)
+        pdf.set_font("Arial", "B", 8)
+        pdf.cell(card_w - 4, 4, f"{wing.get('Wing', '')} Wing", ln=True, align="C")
+
+        pdf.set_xy(x + 2, y + 7)
+        pdf.set_font("Arial", "", 5.8)
+        summary = (
+            f"Total {wing.get('Target Days', 0)}d | "
+            f"Used {wing.get('Used Days', 0)}d | "
+            f"Left {wing.get('Days Left', 0)}d"
+        )
+        pdf.cell(card_w - 4, 4, _dpr_pdf_safe(summary)[:52], ln=True, align="C")
+
+        bx = x + 4
+        by = y + 14
+        bw = card_w - 8
+        row_h = 1.7
+        max_levels = min(len(levels), 16)
+
+        if max_levels:
+            level_h = row_h * max_levels
+            pdf.set_draw_color(148, 163, 184)
+            pdf.rect(bx, by, bw, level_h)
+
+            for level_idx, level in enumerate(levels[:max_levels]):
+                ly = by + level_idx * row_h
+                progress = max(0.0, min(float(level.get("progress", 0) or 0), 100.0))
+                fill_w = bw * progress / 100.0
+                if progress >= 100:
+                    pdf.set_fill_color(22, 163, 74)
+                elif progress > 0:
+                    pdf.set_fill_color(37, 99, 235)
+                else:
+                    pdf.set_fill_color(226, 232, 240)
+                pdf.rect(bx, ly, fill_w, row_h, style="F")
+                pdf.set_draw_color(226, 232, 240)
+                pdf.line(bx, ly, bx + bw, ly)
+
+        table_y = y + 42.5
+        pdf.set_xy(x + 2, table_y)
+        pdf.set_font("Arial", "B", 5.2)
+        pdf.set_text_color(51, 65, 85)
+        pdf.cell(card_w * 0.54, 3.2, "Remaining Slab", border=1)
+        pdf.cell(card_w * 0.20, 3.2, "Prog", border=1, align="C")
+        pdf.cell(card_w * 0.18, 3.2, "Days", border=1, align="C")
+        pdf.ln()
+
+        pdf.set_font("Arial", "", 5.0)
+        for rem in rem_rows:
+            pdf.set_x(x + 2)
+            pdf.cell(card_w * 0.54, 3.0, _dpr_pdf_safe(rem.get("Level", "-"))[:15], border=1)
+            pdf.cell(card_w * 0.20, 3.0, _dpr_pdf_safe(rem.get("Progress", "-")), border=1, align="C")
+            pdf.cell(card_w * 0.18, 3.0, str(rem.get("Days Left", "-")), border=1, align="C")
+            pdf.ln()
+
+    pdf.set_xy(pdf.l_margin, y + card_h + 5)
+
+
 class _DailyProgressPDF(FPDF):
     def footer(self):
         self.set_y(-11)
@@ -953,20 +1309,22 @@ def _dpr_pdf_bytes(report_date: _dt.date, report_parts: dict):
     sales = report_parts.get("sales", {})
     cashflow = report_parts.get("cashflow", {})
     construction = report_parts.get("construction", {})
+    rcc_tracking = report_parts.get("rcc_tracking", {})
 
     _dpr_pdf_kpis(pdf, "Sales - Overall Till Date", sales.get("overall_metrics", []))
     _dpr_pdf_kpis(pdf, "Sales - Today", sales.get("today_metrics", []))
-    _dpr_pdf_table(pdf, "Wing-wise Inventory", sales.get("inventory_df", pd.DataFrame()))
-    _dpr_pdf_table(pdf, "Bookings Done Today", sales.get("bookings_today_df", pd.DataFrame()))
+    _dpr_pdf_table(pdf, "Wing-wise Inventory", sales.get("inventory_df", pd.DataFrame()), max_rows=8)
+    _dpr_pdf_table(pdf, "Bookings Done Today", sales.get("bookings_today_df", pd.DataFrame()), max_rows=6)
 
     _dpr_pdf_kpis(pdf, "Cashflow", cashflow.get("metrics", []))
-    _dpr_pdf_table(pdf, "Wing-wise Cashflow", cashflow.get("wing_df", pd.DataFrame()))
+    _dpr_pdf_table(pdf, "Wing-wise Cashflow", cashflow.get("wing_df", pd.DataFrame()), max_rows=8)
 
     _dpr_pdf_kpis(pdf, "Construction", construction.get("metrics", []))
-    _dpr_pdf_table(pdf, "Contractor-wise Staff Count", construction.get("staff_df", pd.DataFrame()))
-    _dpr_pdf_table(pdf, "Wing-wise Contractor-wise Labour Count", construction.get("labour_df", pd.DataFrame()))
-    _dpr_pdf_table(pdf, "Concrete Consumption", construction.get("concrete_df", pd.DataFrame()))
-    _dpr_pdf_table(pdf, "Work Done Today", construction.get("work_done_df", pd.DataFrame()), max_rows=55)
+    _dpr_pdf_table(pdf, "Contractor-wise Staff Count", construction.get("staff_df", pd.DataFrame()), max_rows=5)
+    _dpr_pdf_table(pdf, "Wing-wise Contractor-wise Labour Count", construction.get("labour_df", pd.DataFrame()), max_rows=8)
+    _dpr_pdf_table(pdf, "Concrete Consumption", construction.get("concrete_df", pd.DataFrame()), max_rows=6)
+    _dpr_pdf_table(pdf, "Work Done Today", construction.get("work_done_df", pd.DataFrame()), max_rows=10)
+    _dpr_pdf_rcc_tracking(pdf, rcc_tracking)
 
     output = pdf.output(dest="S")
     if isinstance(output, str):
@@ -1058,6 +1416,11 @@ else:
         if "booking_df" in globals() and isinstance(booking_df, pd.DataFrame)
         else pd.DataFrame()
     )
+    slab_master_source = (
+        cashflow_slab_master_df.copy()
+        if "cashflow_slab_master_df" in globals() and isinstance(cashflow_slab_master_df, pd.DataFrame)
+        else pd.DataFrame()
+    )
     raw_bookings_source = _dpr_fetch_raw_bookings_for_report(supabase_client)
 
     _dpr_hero(report_date)
@@ -1065,8 +1428,9 @@ else:
     with st.spinner("Preparing director report..."):
         report_parts = {
             "sales": _dpr_build_sales_data(bookings_source, report_date, raw_bookings_source),
-            "cashflow": _dpr_build_cashflow_data(bookings_source),
+            "cashflow": _dpr_build_cashflow_data(bookings_source, slab_master_source),
             "construction": _dpr_build_construction_data(supabase_client, report_date),
+            "rcc_tracking": _dpr_build_rcc_tracking_data(supabase_client),
         }
         pdf_bytes = _dpr_pdf_bytes(report_date, report_parts)
 
@@ -1097,3 +1461,4 @@ else:
     _dpr_render_sales_section(report_parts["sales"])
     _dpr_render_cashflow_section(report_parts["cashflow"])
     _dpr_render_construction_section(report_parts["construction"])
+    _dpr_render_rcc_tracking_section(report_parts["rcc_tracking"])
