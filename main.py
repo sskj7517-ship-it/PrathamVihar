@@ -62,9 +62,6 @@ def _load_all_data_cached():
     return load_all_data(supabase)
 
 
-if st.sidebar.button("Refresh App Data", use_container_width=True):
-    st.cache_data.clear()
-
 try:
     data = _load_all_data_cached()
 
@@ -408,47 +405,91 @@ def _main_section_label(section_name: str) -> str:
 st.sidebar.markdown(
     """
     <style>
+      section[data-testid="stSidebar"] {
+        background:
+          radial-gradient(circle at top left, rgba(212,175,55,.20), transparent 34%),
+          linear-gradient(180deg, #08111f 0%, #101827 48%, #0f172a 100%) !important;
+      }
+      section[data-testid="stSidebar"] .block-container {
+        padding: 18px 14px 22px !important;
+      }
+      .pv-sidebar-brand {
+        border: 1px solid rgba(245, 213, 128, .30);
+        border-radius: 18px;
+        padding: 16px 14px;
+        margin: 2px 0 14px;
+        background: linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.035));
+        box-shadow: 0 18px 40px rgba(0,0,0,.24);
+      }
+      .pv-sidebar-brand h2 {
+        color: #f8fafc;
+        font-size: 20px;
+        line-height: 1.1;
+        margin: 0;
+        font-weight: 950;
+        letter-spacing: 0;
+      }
+      .pv-sidebar-brand p {
+        color: #cbd5e1;
+        margin: 7px 0 0;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .pv-sidebar-pill {
+        display: inline-flex;
+        margin-top: 12px;
+        padding: 5px 9px;
+        border-radius: 999px;
+        background: rgba(245, 213, 128, .14);
+        border: 1px solid rgba(245, 213, 128, .34);
+        color: #fde68a;
+        font-size: 11px;
+        font-weight: 900;
+      }
       section[data-testid="stSidebar"] div[role="radiogroup"] {
-        gap: 7px;
+        gap: 8px;
       }
       section[data-testid="stSidebar"] div[role="radiogroup"] label {
-        border: 1px solid #e2e8f0;
-        border-radius: 11px;
-        padding: 9px 10px;
-        background: #ffffff;
-        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-        transition: all 150ms ease;
+        border: 1px solid rgba(148, 163, 184, .20);
+        border-radius: 14px;
+        padding: 10px 11px;
+        background: rgba(255,255,255,.055);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 8px 22px rgba(0,0,0,.10);
+        transition: all 160ms ease;
       }
       section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-        border-color: #93c5fd;
-        background: #f8fafc;
+        border-color: rgba(245, 213, 128, .45);
+        background: rgba(255,255,255,.09);
         transform: translateX(2px);
       }
       section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
-        border-color: #2563eb;
-        background: linear-gradient(135deg, #eff6ff 0%, #eef2ff 100%);
-        box-shadow: 0 6px 14px rgba(37, 99, 235, 0.14);
+        border-color: rgba(245, 213, 128, .75);
+        background: linear-gradient(135deg, rgba(245, 213, 128, .22), rgba(59,130,246,.16));
+        box-shadow: 0 12px 28px rgba(0,0,0,.24);
       }
-      section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
-        color: #0f172a;
+      section[data-testid="stSidebar"] div[role="radiogroup"] label p {
+        color: #cbd5e1;
         font-weight: 800;
       }
-      .pv-nav-title {
-        font-size: 13px;
-        font-weight: 900;
-        color: #475569;
-        text-transform: uppercase;
-        letter-spacing: .05em;
-        margin: 6px 0 8px;
+      section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
+        color: #fff7ed;
+        font-weight: 950;
       }
-      .pv-nav-note {
+      .pv-nav-title {
         font-size: 12px;
-        color: #64748b;
-        margin: -2px 0 10px;
+        font-weight: 900;
+        color: #facc15;
+        text-transform: uppercase;
+        letter-spacing: .10em;
+        margin: 12px 0 9px;
       }
     </style>
+    <div class="pv-sidebar-brand">
+      <h2>Rate Guard</h2>
+      <p>Pratham Vihar command centre</p>
+      <span class="pv-sidebar-pill">SECTION SWITCHER</span>
+    </div>
     <div class="pv-nav-title">Open Section</div>
-    <div class="pv-nav-note">Only this section loads, so the app stays lighter.</div>
     """,
     unsafe_allow_html=True,
 )
@@ -478,9 +519,6 @@ def get_custom_quarter_label(date):
 
 # Common booking date/month/quarter normalization used by multiple sections.
 _run_app_file("app_parts/global_booking_date_fix.py")
-
-# Existing quick reference sidebar, kept separate so main.py stays light.
-_run_app_file("app_parts/sidebar_reference.py")
 
 SECTION_FILES = {
     "Dashboard": "tabs/dashboard.py",
